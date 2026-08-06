@@ -1,0 +1,118 @@
+{
+  "meta": {
+    "created": "2026-08-06",
+    "version": 1
+  },
+  "gear": [
+    {
+      "id": "G001",
+      "category": "Shelter",
+      "name": "Solo Tent (EXAMPLE - delete me)",
+      "brand": "Big Agnes Copper Spur HV1",
+      "weight_oz": 30.0,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 450.0,
+      "notes": "Includes stakes + guylines, no footprint",
+      "added": "2026-08-06"
+    },
+    {
+      "id": "G002",
+      "category": "Sleep System",
+      "name": "Sleeping Bag (EXAMPLE - delete me)",
+      "brand": "Western Mountaineering 20F",
+      "weight_oz": 29.0,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 5,
+      "cost": 550.0,
+      "notes": "Down, rated 20F - good for late Oct at elevation",
+      "added": "2026-08-06"
+    },
+    {
+      "id": "G003",
+      "category": "Cook System",
+      "name": "Canister Stove (EXAMPLE - delete me)",
+      "brand": "MSR PocketRocket 2",
+      "weight_oz": 2.6,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 45.0,
+      "notes": "Weighed without canister",
+      "added": "2026-08-06"
+    },
+    {
+      "id": "G004",
+      "category": "Water",
+      "name": "Water Filter (EXAMPLE - delete me)",
+      "brand": "Sawyer Squeeze",
+      "weight_oz": 3.0,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 5,
+      "cost": 25.0,
+      "notes": "",
+      "added": "2026-08-06"
+    },
+    {
+      "id": "G005",
+      "category": "Clothing - Worn",
+      "name": "Rain Jacket (EXAMPLE - delete me)",
+      "brand": "Outdoor Research Helium",
+      "weight_oz": 6.4,
+      "weight_type": "Worn Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 170.0,
+      "notes": "Worn, not packed",
+      "added": "2026-08-06"
+    },
+    {
+      "id": "G006",
+      "category": "Electronics",
+      "name": "Old Headlamp (EXAMPLE - delete me)",
+      "brand": "Generic 3-LED",
+      "weight_oz": 4.8,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 2,
+      "cost": 15.0,
+      "notes": "Dim, unreliable switch - candidate to replace",
+      "added": "2026-08-06"
+    }
+  ],
+  "trips": [
+    {
+      "id": "T001",
+      "name": "VA Triple Crown (EXAMPLE - delete me)",
+      "dates": "Late October",
+      "target_base_weight_lb": 15.0,
+      "notes": "Mt. Rogers / Grayson Highlands / Wilburn Ridge loop, ~35 mi",
+      "created": "2026-08-06",
+      "items": [
+        {
+          "gear_id": "G001",
+          "note": ""
+        },
+        {
+          "gear_id": "G002",
+          "note": ""
+        },
+        {
+          "gear_id": "G003",
+          "note": ""
+        },
+        {
+          "gear_id": "G004",
+          "note": ""
+        },
+        {
+          "gear_id": "G005",
+          "note": "Worn, not packed"
+        }
+      ]
+    }
+  ]
+}

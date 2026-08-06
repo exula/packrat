@@ -1,0 +1,10 @@
+[project]
+name = "gear-tracker"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.9"
+dependencies = [
+    "textual>=0.60.0",
+]
+
+
