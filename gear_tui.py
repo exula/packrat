@@ -466,7 +466,7 @@ class TripDashboardScreen(Screen):
         self.trip_id = trip_id
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
+        yield Header(show_clock=True, time_format="%I:%M %p")
         with VerticalScroll(id="dash-scroll"):
             yield Static(id="dash-title", classes="dash-title")
             yield Static(id="dash-summary", classes="panel")
@@ -920,7 +920,7 @@ class GearTrackerApp(App):
             gc.save_data(data_path, self.data)
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Header(show_clock=True, time_format="%I:%M %p")
         with TabbedContent(initial="gear"):
             with TabPane("🎒 Gear Inventory", id="gear"):
                 yield GearPane()

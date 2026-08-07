@@ -1,116 +1,330 @@
 {
   "meta": {
-    "created": "2026-08-06",
+    "created": "2026-08-07",
     "version": 1
   },
   "gear": [
     {
       "id": "G001",
-      "category": "Shelter",
-      "name": "Solo Tent (EXAMPLE - delete me)",
-      "brand": "Big Agnes Copper Spur HV1",
-      "weight_oz": 30.0,
+      "category": "Pack",
+      "name": "Bseash 80L Waterproof Hiking Camping Backpack with Rain Cover",
+      "brand": "Bseash",
+      "weight_oz": 52.0,
       "weight_type": "Base Weight",
       "qty": 1,
-      "usefulness": 4,
-      "cost": 450.0,
-      "notes": "Includes stakes + guylines, no footprint",
-      "added": "2026-08-06"
+      "usefulness": 5,
+      "cost": 55.07,
+      "notes": "Includes rain cover; main pack for longer trips",
+      "added": "2026-08-07"
     },
     {
       "id": "G002",
-      "category": "Sleep System",
-      "name": "Sleeping Bag (EXAMPLE - delete me)",
-      "brand": "Western Mountaineering 20F",
-      "weight_oz": 29.0,
+      "category": "Pack",
+      "name": "Frelaxy Stuff Sack Set 3-Pack (3L, 5L, 9L)",
+      "brand": "Frelaxy",
+      "weight_oz": 3.5,
       "weight_type": "Base Weight",
       "qty": 1,
-      "usefulness": 5,
-      "cost": 550.0,
-      "notes": "Down, rated 20F - good for late Oct at elevation",
-      "added": "2026-08-06"
+      "usefulness": 4,
+      "cost": 137.0,
+      "notes": "Compression sacks for organizing gear",
+      "added": "2026-08-07"
     },
     {
       "id": "G003",
-      "category": "Cook System",
-      "name": "Canister Stove (EXAMPLE - delete me)",
-      "brand": "MSR PocketRocket 2",
-      "weight_oz": 2.6,
-      "weight_type": "Base Weight",
-      "qty": 1,
-      "usefulness": 4,
-      "cost": 45.0,
-      "notes": "Weighed without canister",
-      "added": "2026-08-06"
-    },
-    {
-      "id": "G004",
-      "category": "Water",
-      "name": "Water Filter (EXAMPLE - delete me)",
-      "brand": "Sawyer Squeeze",
-      "weight_oz": 3.0,
+      "category": "Shelter",
+      "name": "Onewind 11ft Camping Hammock with Mosquito Net and Ridgeline",
+      "brand": "Onewind",
+      "weight_oz": 18.0,
       "weight_type": "Base Weight",
       "qty": 1,
       "usefulness": 5,
-      "cost": 25.0,
-      "notes": "",
-      "added": "2026-08-06"
+      "cost": 315.19,
+      "notes": "Includes mosquito net and structural ridgeline; lightweight shelter option",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G004",
+      "category": "Shelter",
+      "name": "Wise Owl Outfitters Hammock Rain Fly",
+      "brand": "Wise Owl Outfitters",
+      "weight_oz": 10.0,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 5,
+      "cost": 315.19,
+      "notes": "Waterproof tarp for hammock setup; includes stakes and carry bag",
+      "added": "2026-08-07"
     },
     {
       "id": "G005",
-      "category": "Clothing - Worn",
-      "name": "Rain Jacket (EXAMPLE - delete me)",
-      "brand": "Outdoor Research Helium",
-      "weight_oz": 6.4,
-      "weight_type": "Worn Weight",
+      "category": "Sleep System",
+      "name": "onewind Hammock Underquilt",
+      "brand": "onewind",
+      "weight_oz": 16.0,
+      "weight_type": "Base Weight",
       "qty": 1,
-      "usefulness": 4,
-      "cost": 170.0,
-      "notes": "Worn, not packed",
-      "added": "2026-08-06"
+      "usefulness": 5,
+      "cost": 315.19,
+      "notes": "Insulated underquilt for hammock; OD Green; full-length coverage",
+      "added": "2026-08-07"
     },
     {
       "id": "G006",
-      "category": "Electronics",
-      "name": "Old Headlamp (EXAMPLE - delete me)",
-      "brand": "Generic 3-LED",
-      "weight_oz": 4.8,
+      "category": "Sleep System",
+      "name": "Travel Bird Top Quilt for Hammocks",
+      "brand": "Travel Bird",
+      "weight_oz": 19.0,
       "weight_type": "Base Weight",
       "qty": 1,
+      "usefulness": 5,
+      "cost": 315.19,
+      "notes": "Ultralight sleeping quilt with warmth rating for hammocks",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G007",
+      "category": "Navigation & Safety",
+      "name": "SWATOM Small Mini Carabiner Clip",
+      "brand": "SWATOM",
+      "weight_oz": 2.0,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 315.19,
+      "notes": "Spring snap hooks for pack attachment and EDC",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G008",
+      "category": "Cook System",
+      "name": "Sea to Summit Frontier Ultralight Collapsible Camp Cup",
+      "brand": "Sea to Summit",
+      "weight_oz": 0.5,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 315.19,
+      "notes": "12oz capacity; puffins bill orange; collapses flat",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G009",
+      "category": "Electronics",
+      "name": "Orfeika 20000mAh Power Bank Fast Charging",
+      "brand": "Orfeika",
+      "weight_oz": 12.5,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 46.96,
+      "notes": "4 built-in cables, 6 outputs; 20W PD USB-C; travel essential",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G010",
+      "category": "Electronics",
+      "name": "CARDIENS AA and AAA Rechargeable Batteries Combo",
+      "brand": "CARDIENS",
+      "weight_oz": 3.5,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 315.19,
+      "notes": "USB-C rechargeable; 8-pack with charging cable",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G011",
+      "category": "Clothing - Worn",
+      "name": "New Balance Men's Fresh Foam X Kaiha Road V1 Running Shoe",
+      "brand": "New Balance",
+      "weight_oz": 9.5,
+      "weight_type": "Worn Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 32.74,
+      "notes": "Slate grey/rain cloud; worn on trail",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G012",
+      "category": "Miscellaneous",
+      "name": "koofull Folding Portable Camping Hiking Stool",
+      "brand": "koofull",
+      "weight_oz": 8.0,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 3,
+      "cost": 10.79,
+      "notes": "Ultralight; folds compact; blue",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G013",
+      "category": "Navigation & Safety",
+      "name": "LiteOutdoors Guyline Reflective Tent Cord",
+      "brand": "LiteOutdoors",
+      "weight_oz": 1.2,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 10.79,
+      "notes": "1.8mm diameter; 60 feet; ultralight reflective; tent guyline",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G014",
+      "category": "Navigation & Safety",
+      "name": "SDTC Tech 30-Piece Guyline Tensioner",
+      "brand": "SDTC Tech",
+      "weight_oz": 1.8,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 4,
+      "cost": 9.71,
+      "notes": "Aluminum alloy cord adjusters; red; 3 types included",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G015",
+      "category": "Navigation & Safety",
+      "name": "9KM Kevlar Cord 150lb/100ft High Strength",
+      "brand": "9KM",
+      "weight_oz": 2.8,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 3,
+      "cost": 10.79,
+      "notes": "Camo green; 2mm; ultralight; abrasion resistant; can be used for saw or ridgeline",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G016",
+      "category": "Navigation & Safety",
+      "name": "Dyneema Reflective Rope 2mm",
+      "brand": "Dyneema",
+      "weight_oz": 1.5,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 3,
+      "cost": 315.19,
+      "notes": "400kg fracture strain; red; ultralight; used for tent guy or ridgeline",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G017",
+      "category": "Miscellaneous",
+      "name": "Hammock Organizer Multipurpose Storage Mesh",
+      "brand": "Generic",
+      "weight_oz": 2.5,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 3,
+      "cost": 315.19,
+      "notes": "7 pockets; foldable; portable hanging storage; lightweight",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G018",
+      "category": "Consumables/Food",
+      "name": "CELSIUS On The Go Cranberry Lemon Energy Drink Mix",
+      "brand": "CELSIUS",
+      "weight_oz": 0.5,
+      "weight_type": "Consumable",
+      "qty": 14,
+      "usefulness": 3,
+      "cost": 10.9,
+      "notes": "Sugar-free energy drink mix; each stick ~0.1oz; portable nutrition",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G019",
+      "category": "Consumables/Food",
+      "name": "Natural Vitality Calm Magnesium Supplement Gummies",
+      "brand": "Natural Vitality",
+      "weight_oz": 5.0,
+      "weight_type": "Consumable",
+      "qty": 1,
       "usefulness": 2,
-      "cost": 15.0,
-      "notes": "Dim, unreliable switch - candidate to replace",
-      "added": "2026-08-06"
+      "cost": 29.39,
+      "notes": "Raspberry lemon; supports stress relief; nice to have but not essential",
+      "added": "2026-08-07"
+    },
+    {
+      "id": "G020",
+      "category": "First Aid",
+      "name": "Cliganic Mosquito Repellent Bracelets",
+      "brand": "Cliganic",
+      "weight_oz": 0.5,
+      "weight_type": "Base Weight",
+      "qty": 1,
+      "usefulness": 3,
+      "cost": 46.41,
+      "notes": "DEET-free; 10 individually wrapped; lightweight mosquito protection",
+      "added": "2026-08-07"
     }
   ],
   "trips": [
     {
       "id": "T001",
-      "name": "VA Triple Crown (EXAMPLE - delete me)",
+      "name": "Virginia Triple Crown (Hammock Setup)",
       "dates": "Late October",
-      "target_base_weight_lb": 15.0,
-      "notes": "Mt. Rogers / Grayson Highlands / Wilburn Ridge loop, ~35 mi",
-      "created": "2026-08-06",
+      "target_base_weight_lb": 12.0,
+      "notes": "Mt. Rogers / Grayson Highlands / Wilburn Ridge loop with hammock camping \u2014 cold nights mean full quilts needed",
+      "created": "2026-08-07",
       "items": [
         {
           "gear_id": "G001",
-          "note": ""
-        },
-        {
-          "gear_id": "G002",
-          "note": ""
+          "note": "Main pack"
         },
         {
           "gear_id": "G003",
-          "note": ""
+          "note": "Hammock shelter"
         },
         {
           "gear_id": "G004",
-          "note": ""
+          "note": "Rain tarp"
         },
         {
           "gear_id": "G005",
-          "note": "Worn, not packed"
+          "note": "Underquilt for insulation"
+        },
+        {
+          "gear_id": "G006",
+          "note": "Top quilt for warmth"
+        },
+        {
+          "gear_id": "G007",
+          "note": "Carabiners for pack attachment"
+        },
+        {
+          "gear_id": "G009",
+          "note": "Power bank for phone/camera"
+        },
+        {
+          "gear_id": "G010",
+          "note": "Batteries for headlamp"
+        },
+        {
+          "gear_id": "G011",
+          "note": "Trail shoes"
+        },
+        {
+          "gear_id": "G013",
+          "note": "Guyline for tarp setup"
+        },
+        {
+          "gear_id": "G014",
+          "note": "Guyline tensioners"
+        },
+        {
+          "gear_id": "G018",
+          "note": "Energy drink for pick-me-ups"
+        },
+        {
+          "gear_id": "G020",
+          "note": "Mosquito protection"
         }
       ]
     }
