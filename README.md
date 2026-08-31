@@ -46,7 +46,16 @@ uv run python main.py --data "/Users/you/Library/Mobile Documents/com~apple~Clou
 
 ## Using the app
 
-Everything is click-driven, with keyboard equivalents for everything:
+Everything is click-driven, with keyboard equivalents for everything. Press
+`?` in the app for the complete shortcut overlay. The most useful shortcuts
+are:
+
+- **1 / 2 / 3** switches between Gear, Trips, and Reports.
+- **/** focuses the search box; **Esc** clears search and returns to the table.
+- **A** adds, **E** edits, **Delete** deletes/removes, and **R** toggles review
+  candidates when the relevant table is focused.
+- **Ctrl+S** saves forms and picker dialogs; **Enter** confirms confirmations.
+- **Ctrl+B** writes a manual `.bak` snapshot beside your data file.
 
 - **Click a table row** to select it; **click it again** (or press Enter)
   to open/edit it. This two-step click mirrors how most file browsers work
@@ -68,15 +77,27 @@ Everything is click-driven, with keyboard equivalents for everything:
 
 ## Data safety
 
-Every save writes to a temp file and atomically replaces the real one, so
-a crash or a synced-file conflict mid-write can't corrupt your data. Since
-it's still a flat JSON file with no locking, avoid editing it from two
-machines within the same iCloud/Dropbox sync cycle — if you do, you'll get
-a conflicted-copy file instead of a merge, and you'd need to reconcile by
-hand.
+Every save validates the complete data model, writes and flushes a temporary
+file, and atomically replaces the real one. The previous version is retained
+as `gear_data.json.bak`. Packrat also checks whether another process or sync
+client changed the file after it was opened; if so, it refuses to overwrite
+that newer copy and rolls the in-memory edit back.
+
+It is still a flat JSON file rather than a mergeable database. If Packrat
+reports an external-change conflict, restart it to load the newer file before
+editing again.
 
 ## Backing it up
 
-It's one JSON file — `cp gear_data.json gear_data_backup_$(date +%F).json`
-whenever you want a snapshot, or let iCloud/Dropbox/OneDrive version
-history handle it.
+Press **Ctrl+B** for an on-demand snapshot, copy the JSON file whenever you
+want a dated archive, or use iCloud/Dropbox/OneDrive version history.
+
+## Development
+
+Run the core and headless Textual tests with:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+The same suite runs on Python 3.9 and 3.12 for every pull request.

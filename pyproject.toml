@@ -1,7 +1,7 @@
 [project]
 name = "gear-tracker"
 version = "0.1.0"
-description = "Add your description here"
+description = "A portable terminal app for backpacking gear and trip pack lists"
 requires-python = ">=3.9"
 dependencies = [
     "textual>=0.60.0",
@@ -11,5 +11,4 @@ dependencies = [
 dev = [
     "textual-dev>=1.8.0",
 ]
-
 
