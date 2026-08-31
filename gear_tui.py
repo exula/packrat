@@ -11,20 +11,29 @@ Requires: pip install textual (see requirements.txt)
 """
 
 import argparse
+import copy
 import os
 from datetime import date
 from typing import Optional
 
+from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import Screen, ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import (
-    Header, Footer, DataTable, Input, Select, Button, Static, Label,
-    TabbedContent, TabPane,
+    Button,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Label,
+    Select,
+    Static,
+    TabbedContent,
+    TabPane,
 )
-from rich.text import Text
 
 import gear_core as gc
 
@@ -123,14 +132,16 @@ ModalScreen {
     background: #182015;
     border: thick #4A7856;
     padding: 1 2;
-    width: 64;
+    width: 90%;
+    max-width: 64;
     height: auto;
     max-height: 90%;
     overflow-y: auto;
 }
 
 .picker-dialog {
-    width: 76;
+    width: 95%;
+    max-width: 76;
     height: 34;
 }
 
@@ -214,7 +225,10 @@ def colored_bar(percent: float, width: int = 20) -> Text:
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "confirm", "Confirm"),
+    ]
 
     def __init__(self, message: str, danger: bool = False):
         super().__init__()
@@ -231,6 +245,9 @@ class ConfirmScreen(ModalScreen[bool]):
     def action_cancel(self) -> None:
         self.dismiss(False)
 
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
     @on(Button.Pressed, "#c-cancel")
     def _cancel(self) -> None:
         self.dismiss(False)
@@ -241,7 +258,10 @@ class ConfirmScreen(ModalScreen[bool]):
 
 
 class GearFormScreen(ModalScreen[Optional[dict]]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "save", "Save"),
+    ]
 
     def __init__(self, mode: str = "add", initial: Optional[dict] = None):
         super().__init__()
@@ -289,6 +309,9 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def action_save(self) -> None:
+        self._save()
+
     @on(Button.Pressed, "#f-cancel")
     def _cancel(self) -> None:
         self.dismiss(None)
@@ -301,10 +324,13 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
             return
         try:
             weight = float(self.query_one("#f-weight", Input).value or 0)
-            qty = max(1, int(self.query_one("#f-qty", Input).value or 1))
+            qty = int(self.query_one("#f-qty", Input).value or 1)
             cost = float(self.query_one("#f-cost", Input).value or 0)
         except ValueError:
             self.app.notify("Weight, quantity, and cost must be numbers", severity="error")
+            return
+        if weight < 0 or cost < 0 or qty < 1:
+            self.app.notify("Weight/cost cannot be negative and quantity must be at least 1", severity="error")
             return
         result = {
             "category": self.query_one("#f-category", Select).value,
@@ -324,7 +350,10 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
 
 
 class TripFormScreen(ModalScreen[Optional[dict]]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "save", "Save"),
+    ]
 
     def __init__(self, mode: str = "add", initial: Optional[dict] = None):
         super().__init__()
@@ -353,6 +382,9 @@ class TripFormScreen(ModalScreen[Optional[dict]]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def action_save(self) -> None:
+        self._save()
+
     @on(Button.Pressed, "#t-cancel")
     def _cancel(self) -> None:
         self.dismiss(None)
@@ -369,6 +401,9 @@ class TripFormScreen(ModalScreen[Optional[dict]]):
         except ValueError:
             self.app.notify("Target base weight must be a number", severity="error")
             return
+        if target is not None and target < 0:
+            self.app.notify("Target base weight cannot be negative", severity="error")
+            return
         result = {
             "name": name,
             "dates": self.query_one("#t-dates", Input).value.strip(),
@@ -383,7 +418,10 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
     immediately (using whatever note text is currently typed); the button
     is there for keyboard users too."""
 
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "add", "Add selected"),
+    ]
 
     def __init__(self, all_gear: list, exclude_ids: list):
         super().__init__()
@@ -425,6 +463,9 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
     def action_cancel(self) -> None:
         self.dismiss(None)
 
+    def action_add(self) -> None:
+        self._add()
+
     @on(Button.Pressed, "#gp-cancel")
     def _cancel(self) -> None:
         self.dismiss(None)
@@ -453,13 +494,52 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
         self.dismiss((gear_id, note))
 
 
+class ShortcutHelpScreen(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("question_mark", "close", "Close", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        help_text = """[b]Keyboard shortcuts[/b]
+
+[b]Anywhere[/b]       1 / 2 / 3  Switch tabs     /  Search     ?  This help
+                 Ctrl+B  Backup data   Q  Quit
+
+[b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
+[b]Trips[/b]          A  Add      Enter  Open  Delete  Delete
+[b]Trip dashboard[/b] A  Add item E  Edit trip Delete  Remove     X  Export
+[b]Dialogs[/b]        Ctrl+S  Save/add          Esc  Cancel
+[b]Confirmations[/b]  Enter  Confirm            Esc  Cancel
+
+[dim]Arrow keys move through tables. Enter activates the selected row.[/dim]"""
+        with Vertical(id="dialog"):
+            yield Static(help_text)
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Close", id="help-close", variant="primary")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#help-close")
+    def _close(self) -> None:
+        self.dismiss(None)
+
+
 # ---------------------------------------------------------------------------
 # Trip dashboard (full screen, pushed when a trip is opened)
 # ---------------------------------------------------------------------------
 
 
 class TripDashboardScreen(Screen):
-    BINDINGS = [Binding("escape", "go_back", "Back"), Binding("b", "go_back", "Back")]
+    BINDINGS = [
+        Binding("escape", "go_back", "Back"),
+        Binding("b", "go_back", "Back"),
+        Binding("a", "add_item", "Add item"),
+        Binding("e", "edit_trip", "Edit trip"),
+        Binding("delete", "remove_item", "Remove"),
+        Binding("x", "export", "Export"),
+    ]
 
     def __init__(self, trip_id: str):
         super().__init__()
@@ -542,6 +622,18 @@ class TripDashboardScreen(Screen):
     def action_go_back(self) -> None:
         self.dismiss()
 
+    def action_add_item(self) -> None:
+        self._add_item()
+
+    def action_edit_trip(self) -> None:
+        self._edit_trip()
+
+    def action_remove_item(self) -> None:
+        self._remove_item()
+
+    def action_export(self) -> None:
+        self._export()
+
     @on(Button.Pressed, "#dash-back")
     def _back(self) -> None:
         self.dismiss()
@@ -565,7 +657,8 @@ class TripDashboardScreen(Screen):
             if result:
                 gear_id, note = result
                 trip["items"].append({"gear_id": gear_id, "note": note})
-                app.save()
+                if not app.save():
+                    return
                 self.refresh_dashboard()
                 self.app.notify("Added to trip", severity="information", timeout=2)
 
@@ -584,7 +677,9 @@ class TripDashboardScreen(Screen):
         def handle(confirmed):
             if confirmed:
                 trip["items"] = [i for i in trip["items"] if i["gear_id"] != gear_id]
-                app.save()
+                if not app.save():
+                    self.refresh_dashboard()
+                    return
                 self.refresh_dashboard()
 
         self.app.push_screen(ConfirmScreen(f"Remove '{name}' from this trip?", danger=True), handle)
@@ -597,7 +692,9 @@ class TripDashboardScreen(Screen):
         def handle(result):
             if result:
                 trip.update(result)
-                app.save()
+                if not app.save():
+                    self.refresh_dashboard()
+                    return
                 self.refresh_dashboard()
 
         self.app.push_screen(TripFormScreen(mode="edit", initial=trip), handle)
@@ -607,12 +704,8 @@ class TripDashboardScreen(Screen):
         app: "GearTrackerApp" = self.app  # type: ignore
         trip = gc.find_trip(app.data, self.trip_id)
         md = gc.render_trip_markdown(app.data, trip)
-        os.makedirs(gc.DEFAULT_EXPORT_DIR, exist_ok=True)
         fname = f"{gc.safe_filename(trip['name'])}_{date.today().isoformat()}.md"
-        path = os.path.join(gc.DEFAULT_EXPORT_DIR, fname)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(md)
-        self.app.notify(f"Wrote {path}", title="Export complete", timeout=4)
+        app.write_export(fname, md)
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +714,14 @@ class TripDashboardScreen(Screen):
 
 
 class GearPane(Vertical):
+    BINDINGS = [
+        Binding("a", "add", "Add"),
+        Binding("e", "edit", "Edit"),
+        Binding("delete", "delete", "Delete"),
+        Binding("r", "review", "Review"),
+        Binding("escape", "clear_search", "Clear search", show=False),
+    ]
+
     def compose(self) -> ComposeResult:
         with Horizontal(classes="toolbar"):
             yield Input(placeholder="Search gear (name, brand, category, notes)...", id="gear-search")
@@ -640,10 +741,12 @@ class GearPane(Vertical):
     def refresh_table(self, filter_text: str = "", review_only: bool = False) -> None:
         app: "GearTrackerApp" = self.app  # type: ignore
         table = self.query_one("#gear-table", DataTable)
+        selected_id = self._current_gear_id()
         table.clear()
         gear = sorted(app.data["gear"], key=lambda g: (g["category"], -gc.total_weight_oz(g)))
         t = filter_text.lower().strip()
         count = 0
+        visible_ids = set()
         for g in gear:
             if review_only and not gc.is_review_flagged(g):
                 continue
@@ -653,12 +756,38 @@ class GearPane(Vertical):
             table.add_row(g["id"], g["category"], g["name"], f"{gc.total_weight_oz(g):.1f}",
                          g["weight_type"], str(g["qty"]), f"{g['usefulness']}/5", flag, key=g["id"])
             count += 1
+            visible_ids.add(g["id"])
+        if selected_id in visible_ids:
+            table.move_cursor(row=table.get_row_index(selected_id), animate=False)
         label = f"{count} item(s)" + (" · review filter on" if review_only else "")
         self.query_one("#gear-status", Static).update(label)
 
     @on(Input.Changed, "#gear-search")
     def _search_changed(self, event: Input.Changed) -> None:
-        self.refresh_table(event.value)
+        self.refresh_table(event.value, review_only=getattr(self, "_review_only", False))
+
+    def _refresh_current(self) -> None:
+        self.refresh_table(
+            self.query_one("#gear-search", Input).value,
+            review_only=getattr(self, "_review_only", False),
+        )
+
+    def action_add(self) -> None:
+        self._add()
+
+    def action_edit(self) -> None:
+        self._edit_button()
+
+    def action_delete(self) -> None:
+        self._delete()
+
+    def action_review(self) -> None:
+        self._toggle_review()
+
+    def action_clear_search(self) -> None:
+        search = self.query_one("#gear-search", Input)
+        search.value = ""
+        self.query_one("#gear-table", DataTable).focus()
 
     @on(Button.Pressed, "#gear-add")
     def _add(self) -> None:
@@ -666,8 +795,10 @@ class GearPane(Vertical):
             if result:
                 result["id"] = gc.next_id(self.app.data["gear"], "G")  # type: ignore
                 self.app.data["gear"].append(result)  # type: ignore
-                self.app.save()  # type: ignore
-                self.refresh_table(self.query_one("#gear-search", Input).value)
+                if not self.app.save():  # type: ignore
+                    self._refresh_current()
+                    return
+                self._refresh_current()
                 self.app.notify(f"Added {result['name']}", timeout=2)
 
         self.app.push_screen(GearFormScreen(mode="add"), handle)
@@ -694,8 +825,10 @@ class GearPane(Vertical):
                 result.pop("id", None)
                 result.pop("added", None)
                 gear.update(result)
-                app.save()
-                self.refresh_table(self.query_one("#gear-search", Input).value)
+                if not app.save():
+                    self._refresh_current()
+                    return
+                self._refresh_current()
 
         self.app.push_screen(GearFormScreen(mode="edit", initial=gear), handle)
 
@@ -726,8 +859,10 @@ class GearPane(Vertical):
                 for t in refs:
                     t["items"] = [i for i in t["items"] if i["gear_id"] != gear_id]
                 app.data["gear"] = [g for g in app.data["gear"] if g["id"] != gear_id]
-                app.save()
-                self.refresh_table(self.query_one("#gear-search", Input).value)
+                if not app.save():
+                    self._refresh_current()
+                    return
+                self._refresh_current()
 
         self.app.push_screen(ConfirmScreen(msg, danger=True), handle)
 
@@ -745,6 +880,13 @@ class GearPane(Vertical):
 
 
 class TripsPane(Vertical):
+    BINDINGS = [
+        Binding("a", "add", "Add"),
+        Binding("enter", "open", "Open"),
+        Binding("delete", "delete", "Delete"),
+        Binding("escape", "clear_search", "Clear search", show=False),
+    ]
+
     def compose(self) -> ComposeResult:
         with Horizontal(classes="toolbar"):
             yield Input(placeholder="Search trips...", id="trip-search")
@@ -763,9 +905,11 @@ class TripsPane(Vertical):
     def refresh_table(self, filter_text: str = "") -> None:
         app: "GearTrackerApp" = self.app  # type: ignore
         table = self.query_one("#trip-table", DataTable)
+        selected_id = self._current_trip_id()
         table.clear()
         t = filter_text.lower().strip()
         count = 0
+        visible_ids = set()
         for trip in app.data["trips"]:
             blob = f"{trip['name']} {trip.get('dates','')}".lower()
             if t and t not in blob:
@@ -781,11 +925,28 @@ class TripsPane(Vertical):
             table.add_row(trip["id"], trip["name"], trip.get("dates", ""), str(len(trip["items"])),
                          f"{s['base_lb']:.2f}", target, delta, key=trip["id"])
             count += 1
+            visible_ids.add(trip["id"])
+        if selected_id in visible_ids:
+            table.move_cursor(row=table.get_row_index(selected_id), animate=False)
         self.query_one("#trip-status", Static).update(f"{count} trip(s)")
 
     @on(Input.Changed, "#trip-search")
     def _search_changed(self, event: Input.Changed) -> None:
         self.refresh_table(event.value)
+
+    def action_add(self) -> None:
+        self._add()
+
+    def action_open(self) -> None:
+        self._open_button()
+
+    def action_delete(self) -> None:
+        self._delete()
+
+    def action_clear_search(self) -> None:
+        search = self.query_one("#trip-search", Input)
+        search.value = ""
+        self.query_one("#trip-table", DataTable).focus()
 
     @on(Button.Pressed, "#trip-add")
     def _add(self) -> None:
@@ -795,7 +956,9 @@ class TripsPane(Vertical):
                 result["created"] = date.today().isoformat()
                 result["items"] = []
                 self.app.data["trips"].append(result)  # type: ignore
-                self.app.save()  # type: ignore
+                if not self.app.save():  # type: ignore
+                    self.refresh_table()
+                    return
                 self.refresh_table()
                 self.app.notify(f"Added trip {result['name']}", timeout=2)
 
@@ -835,7 +998,9 @@ class TripsPane(Vertical):
         def handle(confirmed):
             if confirmed:
                 app.data["trips"] = [t for t in app.data["trips"] if t["id"] != trip_id]
-                app.save()
+                if not app.save():
+                    self.refresh_table()
+                    return
                 self.refresh_table()
 
         self.app.push_screen(
@@ -859,7 +1024,8 @@ class ReportsPane(Vertical):
     def on_mount(self) -> None:
         self.query_one("#report-trip-table", DataTable).add_columns("ID", "Name", "Dates", "Items")
         self.refresh_table()
-        self.query_one("#report-status", Static).update(f"Exports are written to: {gc.DEFAULT_EXPORT_DIR}")
+        app: "GearTrackerApp" = self.app  # type: ignore
+        self.query_one("#report-status", Static).update(f"Exports are written to: {app.export_dir}")
 
     def refresh_table(self) -> None:
         app: "GearTrackerApp" = self.app  # type: ignore
@@ -878,25 +1044,19 @@ class ReportsPane(Vertical):
         app: "GearTrackerApp" = self.app  # type: ignore
         trip = gc.find_trip(app.data, trip_id)
         md = gc.render_trip_markdown(app.data, trip)
-        os.makedirs(gc.DEFAULT_EXPORT_DIR, exist_ok=True)
         fname = f"{gc.safe_filename(trip['name'])}_{date.today().isoformat()}.md"
-        path = os.path.join(gc.DEFAULT_EXPORT_DIR, fname)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(md)
-        self.query_one("#report-status", Static).update(f"Wrote {path}")
-        self.app.notify(f"Wrote {path}", title="Export complete", timeout=4)
+        path = app.write_export(fname, md)
+        if path:
+            self.query_one("#report-status", Static).update(f"Wrote {path}")
 
     @on(Button.Pressed, "#report-export-inventory")
     def _export_inventory(self) -> None:
         app: "GearTrackerApp" = self.app  # type: ignore
         md = gc.render_inventory_markdown(app.data)
-        os.makedirs(gc.DEFAULT_EXPORT_DIR, exist_ok=True)
         fname = f"gear_inventory_{date.today().isoformat()}.md"
-        path = os.path.join(gc.DEFAULT_EXPORT_DIR, fname)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(md)
-        self.query_one("#report-status", Static).update(f"Wrote {path}")
-        self.app.notify(f"Wrote {path}", title="Export complete", timeout=4)
+        path = app.write_export(fname, md)
+        if path:
+            self.query_one("#report-status", Static).update(f"Wrote {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -908,16 +1068,25 @@ class GearTrackerApp(App):
     CSS = APP_CSS
     TITLE = "Backpacking Gear Tracker"
     BINDINGS = [
+        Binding("1", "show_tab('gear')", "Gear"),
+        Binding("2", "show_tab('trips')", "Trips"),
+        Binding("3", "show_tab('reports')", "Reports"),
+        Binding("slash", "search", "Search"),
+        Binding("question_mark", "show_help", "Help"),
+        Binding("ctrl+b", "backup", "Backup"),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
     def __init__(self, data_path: str):
         super().__init__()
-        self.data_path = data_path
-        self.data = gc.load_data(data_path)
-        if not os.path.exists(data_path):
-            gc.save_data(data_path, self.data)
+        self.data_path = os.path.abspath(os.path.expanduser(data_path))
+        self.export_dir = gc.export_dir_for_data(self.data_path)
+        self.data = gc.load_data(self.data_path)
+        if not os.path.exists(self.data_path):
+            gc.save_data(self.data_path, self.data)
+        self._data_signature = gc.file_signature(self.data_path)
+        self._last_saved_data = copy.deepcopy(self.data)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, time_format="%I:%M %p")
@@ -930,8 +1099,72 @@ class GearTrackerApp(App):
                 yield ReportsPane()
         yield Footer()
 
-    def save(self) -> None:
-        gc.save_data(self.data_path, self.data)
+    def action_show_tab(self, tab_id: str) -> None:
+        tabs = self.query_one(TabbedContent)
+        tabs.active = tab_id
+        self._refresh_tab(tab_id)
+
+    def action_search(self) -> None:
+        active = self.query_one(TabbedContent).active
+        selector = "#gear-search" if active == "gear" else "#trip-search" if active == "trips" else None
+        if selector:
+            search = self.query_one(selector, Input)
+            search.focus()
+            search.select_all()
+        else:
+            self.notify("Search is available in Gear and Trips", severity="information", timeout=2)
+
+    def action_show_help(self) -> None:
+        self.push_screen(ShortcutHelpScreen())
+
+    def action_backup(self) -> None:
+        try:
+            path = gc.backup_data(self.data_path)
+        except OSError as exc:
+            self.notify(f"Backup failed: {exc}", severity="error", timeout=5)
+            return
+        self.notify(f"Wrote {path}", title="Backup complete", timeout=4)
+
+    @on(TabbedContent.TabActivated)
+    def _tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        self._refresh_tab(event.pane.id or "")
+
+    def _refresh_tab(self, tab_id: str) -> None:
+        if tab_id == "gear":
+            pane = self.query_one(GearPane)
+            pane.refresh_table(
+                pane.query_one("#gear-search", Input).value,
+                review_only=getattr(pane, "_review_only", False),
+            )
+        elif tab_id == "trips":
+            pane = self.query_one(TripsPane)
+            pane.refresh_table(pane.query_one("#trip-search", Input).value)
+        elif tab_id == "reports":
+            self.query_one(ReportsPane).refresh_table()
+
+    def save(self) -> bool:
+        try:
+            self._data_signature = gc.save_data(
+                self.data_path,
+                self.data,
+                expected_signature=self._data_signature,
+            )
+        except (OSError, gc.DataValidationError) as exc:
+            self.data = copy.deepcopy(self._last_saved_data)
+            self.notify(f"Save failed; changes were rolled back: {exc}", severity="error", timeout=7)
+            return False
+        self._last_saved_data = copy.deepcopy(self.data)
+        return True
+
+    def write_export(self, filename: str, content: str) -> Optional[str]:
+        path = os.path.join(self.export_dir, filename)
+        try:
+            gc.write_export(path, content)
+        except OSError as exc:
+            self.notify(f"Export failed: {exc}", severity="error", timeout=6)
+            return None
+        self.notify(f"Wrote {path}", title="Export complete", timeout=4)
+        return path
 
 
 def main():
@@ -939,7 +1172,10 @@ def main():
     parser.add_argument("--data", default=gc.DEFAULT_DATA_PATH,
                         help="Path to the JSON data file (default: gear_data.json next to this script)")
     args = parser.parse_args()
-    app = GearTrackerApp(args.data)
+    try:
+        app = GearTrackerApp(args.data)
+    except (OSError, gc.DataValidationError) as exc:
+        parser.error(f"could not load data file: {exc}")
     app.run()
 
 

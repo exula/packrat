@@ -6,8 +6,11 @@ CLI, or a test script without dragging in a terminal.
 """
 
 import json
+import math
 import os
-from datetime import datetime, date
+import shutil
+import tempfile
+from datetime import date, datetime
 
 CATEGORIES = [
     "Shelter", "Sleep System", "Pack", "Cook System", "Water",
@@ -28,10 +31,19 @@ BIG_THREE = {"Shelter", "Sleep System", "Pack"}
 
 REVIEW_WEIGHT_THRESHOLD_OZ = 8.0
 REVIEW_USEFULNESS_THRESHOLD = 3
+DATA_VERSION = 1
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DATA_PATH = os.path.join(SCRIPT_DIR, "gear_data.json")
 DEFAULT_EXPORT_DIR = os.path.join(SCRIPT_DIR, "exports")
+
+
+class DataValidationError(ValueError):
+    """Raised when a data file doesn't match Packrat's expected schema."""
+
+
+class DataConflictError(OSError):
+    """Raised rather than overwriting a data file changed by another process."""
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -39,7 +51,11 @@ DEFAULT_EXPORT_DIR = os.path.join(SCRIPT_DIR, "exports")
 
 
 def blank_data():
-    return {"meta": {"created": date.today().isoformat(), "version": 1}, "gear": [], "trips": []}
+    return {
+        "meta": {"created": date.today().isoformat(), "version": DATA_VERSION},
+        "gear": [],
+        "trips": [],
+    }
 
 
 def example_data():
@@ -86,23 +102,204 @@ def example_data():
     return data
 
 
-def load_data(path):
-    if not os.path.exists(path):
-        return example_data()
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    data.setdefault("meta", {"created": date.today().isoformat(), "version": 1})
-    data.setdefault("gear", [])
-    data.setdefault("trips", [])
+def _number(value, field, *, minimum=0.0):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DataValidationError(f"{field} must be a number")
+    if not math.isfinite(value):
+        raise DataValidationError(f"{field} must be finite")
+    if value < minimum:
+        raise DataValidationError(f"{field} must be at least {minimum:g}")
+    return value
+
+
+def validate_data(data):
+    """Validate persisted data and add backward-compatible optional defaults.
+
+    The function deliberately mutates ``data`` only to supply fields older files
+    may not contain. Invalid or ambiguous values are rejected rather than being
+    silently coerced and later producing incorrect pack weights.
+    """
+    if not isinstance(data, dict):
+        raise DataValidationError("data file must contain a JSON object")
+    if not isinstance(data.setdefault("meta", {}), dict):
+        raise DataValidationError("meta must be an object")
+    data["meta"].setdefault("created", date.today().isoformat())
+    version = data["meta"].setdefault("version", DATA_VERSION)
+    if not isinstance(data["meta"]["created"], str):
+        raise DataValidationError("meta.created must be a string")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise DataValidationError("meta.version must be an integer")
+    if version > DATA_VERSION:
+        raise DataValidationError(
+            f"data version {version} is newer than this Packrat supports ({DATA_VERSION})"
+        )
+
+    for collection in ("gear", "trips"):
+        if not isinstance(data.setdefault(collection, []), list):
+            raise DataValidationError(f"{collection} must be a list")
+
+    gear_ids = set()
+    for index, gear in enumerate(data["gear"]):
+        label = f"gear[{index}]"
+        if not isinstance(gear, dict):
+            raise DataValidationError(f"{label} must be an object")
+        gear_id = gear.get("id")
+        if not isinstance(gear_id, str) or not gear_id.strip():
+            raise DataValidationError(f"{label}.id must be a non-empty string")
+        if gear_id in gear_ids:
+            raise DataValidationError(f"duplicate gear id: {gear_id}")
+        gear_ids.add(gear_id)
+        for field in ("name", "category"):
+            if not isinstance(gear.get(field), str) or not gear[field].strip():
+                raise DataValidationError(f"{label}.{field} must be a non-empty string")
+        if gear["category"] not in CATEGORIES:
+            raise DataValidationError(
+                f"{label}.category must be one of: {', '.join(CATEGORIES)}"
+            )
+        gear.setdefault("brand", "")
+        gear.setdefault("notes", "")
+        gear.setdefault("added", date.today().isoformat())
+        if not all(isinstance(gear[field], str) for field in ("brand", "notes", "added")):
+            raise DataValidationError(f"{label} text fields must be strings")
+        _number(gear.get("weight_oz"), f"{label}.weight_oz")
+        qty = _number(gear.get("qty"), f"{label}.qty", minimum=1)
+        if not isinstance(qty, int):
+            raise DataValidationError(f"{label}.qty must be an integer")
+        usefulness = _number(gear.get("usefulness"), f"{label}.usefulness", minimum=1)
+        if not isinstance(usefulness, int) or usefulness > 5:
+            raise DataValidationError(f"{label}.usefulness must be an integer from 1 to 5")
+        _number(gear.setdefault("cost", 0.0), f"{label}.cost")
+        if gear.get("weight_type") not in WEIGHT_TYPES:
+            raise DataValidationError(
+                f"{label}.weight_type must be one of: {', '.join(WEIGHT_TYPES)}"
+            )
+
+    trip_ids = set()
+    for index, trip in enumerate(data["trips"]):
+        label = f"trips[{index}]"
+        if not isinstance(trip, dict):
+            raise DataValidationError(f"{label} must be an object")
+        trip_id = trip.get("id")
+        if not isinstance(trip_id, str) or not trip_id.strip():
+            raise DataValidationError(f"{label}.id must be a non-empty string")
+        if trip_id in trip_ids:
+            raise DataValidationError(f"duplicate trip id: {trip_id}")
+        trip_ids.add(trip_id)
+        if not isinstance(trip.get("name"), str) or not trip["name"].strip():
+            raise DataValidationError(f"{label}.name must be a non-empty string")
+        trip.setdefault("dates", "")
+        trip.setdefault("notes", "")
+        trip.setdefault("created", date.today().isoformat())
+        if not all(isinstance(trip[field], str) for field in ("dates", "notes", "created")):
+            raise DataValidationError(f"{label} text fields must be strings")
+        target = trip.setdefault("target_base_weight_lb", None)
+        if target is not None:
+            _number(target, f"{label}.target_base_weight_lb")
+        if not isinstance(trip.setdefault("items", []), list):
+            raise DataValidationError(f"{label}.items must be a list")
+        assigned = set()
+        for item_index, entry in enumerate(trip["items"]):
+            entry_label = f"{label}.items[{item_index}]"
+            if not isinstance(entry, dict):
+                raise DataValidationError(f"{entry_label} must be an object")
+            gear_id = entry.get("gear_id")
+            if not isinstance(gear_id, str) or not gear_id.strip():
+                raise DataValidationError(f"{entry_label}.gear_id must be a non-empty string")
+            if gear_id in assigned:
+                raise DataValidationError(f"{label} assigns gear {gear_id} more than once")
+            assigned.add(gear_id)
+            entry.setdefault("note", "")
+            if not isinstance(entry["note"], str):
+                raise DataValidationError(f"{entry_label}.note must be a string")
     return data
 
 
-def save_data(path, data):
-    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp_path, path)
+def load_data(path):
+    path = os.fspath(path)
+    if not os.path.exists(path):
+        return example_data()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise DataValidationError(
+            f"invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+        ) from exc
+    return validate_data(data)
+
+
+def _atomic_write(path, content):
+    path = os.fspath(path)
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def file_signature(path):
+    path = os.fspath(path)
+    try:
+        stat = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return stat.st_mtime_ns, stat.st_size
+
+
+def save_data(path, data, expected_signature=None):
+    path = os.fspath(path)
+    validate_data(data)
+    if expected_signature is not None and file_signature(path) != expected_signature:
+        raise DataConflictError(
+            "the data file changed on disk; restart Packrat to load the newer copy"
+        )
+    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if os.path.exists(path):
+        backup_data(path)
+    _atomic_write(path, content)
+    return file_signature(path)
+
+
+def backup_data(path):
+    """Create or replace a recoverable snapshot next to the data file."""
+    path = os.fspath(path)
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    backup_path = path + ".bak"
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", suffix=".bak", dir=directory)
+    os.close(fd)
+    try:
+        shutil.copy2(path, tmp_path)
+        os.replace(tmp_path, backup_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+    return backup_path
+
+
+def export_dir_for_data(data_path):
+    """Keep exports with the selected portable data file."""
+    return os.path.join(os.path.dirname(os.path.abspath(os.fspath(data_path))), "exports")
+
+
+def write_export(path, content):
+    path = os.fspath(path)
+    _atomic_write(path, content)
+    return path
 
 
 def next_id(items, prefix):
