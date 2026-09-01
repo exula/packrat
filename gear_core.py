@@ -35,11 +35,6 @@ REVIEW_USEFULNESS_THRESHOLD = 3
 AUDIT_STATUSES = ("covered", "omitted", "unresolved")
 DATA_VERSION = 2
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DATA_PATH = os.path.join(SCRIPT_DIR, "gear_data.json")
-DEFAULT_EXPORT_DIR = os.path.join(SCRIPT_DIR, "exports")
-
-
 class DataValidationError(ValueError):
     """Raised when a data file doesn't match Packrat's expected schema."""
 
