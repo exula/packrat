@@ -28,7 +28,7 @@ platform-specific folder or enter another folder; Packrat creates
 Without `uv`:
 
 ```bash
-pip install -r requirements.txt   # or: pip install textual
+pip install -r requirements.txt   # or: pip install textual platformdirs
 python3 main.py
 ```
 

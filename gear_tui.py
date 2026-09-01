@@ -7,7 +7,7 @@ Run:
     python3 gear_tui.py
     python3 gear_tui.py --data /path/to/gear_data.json
 
-Requires: pip install textual (see requirements.txt)
+Requires: pip install textual platformdirs (see requirements.txt)
 """
 
 import argparse
@@ -22,6 +22,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
@@ -745,7 +746,7 @@ class ShortcutHelpScreen(ModalScreen[None]):
         help_text = """[b]Keyboard shortcuts[/b]
 
 [b]Anywhere[/b]       1 / 2 / 3  Switch tabs     /  Search     ?  This help
-                 Ctrl+B  Backup data   Q  Quit
+                 Ctrl+B  Backup data   Ctrl+P  Preferences   Q  Quit
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
 [b]Trips[/b]          A  Add      Enter  Open  D  Duplicate  C  Compare  Delete  Delete
@@ -1421,6 +1422,7 @@ class SetupApp(App):
 
     CSS = APP_CSS + "\nScreen { align: center middle; }"
     TITLE = "Packrat Setup"
+    AUTO_FOCUS = "#setup-folder"
 
     def __init__(self, initial_error: str = "", preferences_path: Optional[str] = None):
         super().__init__()
@@ -1440,6 +1442,19 @@ class SetupApp(App):
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Quit", id="setup-quit")
                 yield Button("Use This Folder", id="setup-use", variant="success")
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._select_folder)
+
+    def _select_folder(self) -> None:
+        try:
+            self.query_one("#setup-folder", Input).select_all()
+        except NoMatches:
+            pass
+
+    @on(Input.Submitted, "#setup-folder")
+    def _submit_folder(self) -> None:
+        self._use_folder()
 
     @on(Button.Pressed, "#setup-use")
     def _use_folder(self) -> None:
@@ -1471,10 +1486,12 @@ class PreferencesScreen(ModalScreen[Optional[Tuple[str, str]]]):
     """Choose whether to open another library or copy the current one."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    AUTO_FOCUS = "#preferences-folder"
 
-    def __init__(self, current_directory: str):
+    def __init__(self, current_directory: str, initial_error: str = ""):
         super().__init__()
         self.current_directory = current_directory
+        self.initial_error = initial_error
 
     def compose(self) -> ComposeResult:
         with Vertical(id="preferences-dialog"):
@@ -1485,11 +1502,24 @@ class PreferencesScreen(ModalScreen[Optional[Tuple[str, str]]]):
             )
             yield Label("Gear storage folder")
             yield Input(value=self.current_directory, id="preferences-folder")
-            yield Static("", id="preferences-error")
+            yield Static(self.initial_error, id="preferences-error")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="preferences-cancel")
                 yield Button("Open / Create", id="preferences-open", variant="success")
                 yield Button("Copy Current & Switch", id="preferences-copy")
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._select_folder)
+
+    def _select_folder(self) -> None:
+        try:
+            self.query_one("#preferences-folder", Input).select_all()
+        except NoMatches:
+            pass
+
+    @on(Input.Submitted, "#preferences-folder")
+    def _submit_folder(self) -> None:
+        self._open()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1517,7 +1547,7 @@ class GearTrackerApp(App):
         Binding("slash", "search", "Search"),
         Binding("question_mark", "show_help", "Help"),
         Binding("ctrl+b", "backup", "Backup"),
-        Binding("ctrl+p", "preferences", "Preferences"),
+        Binding("ctrl+p", "preferences", "Preferences", priority=True),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
@@ -1603,7 +1633,10 @@ class GearTrackerApp(App):
                     os.unlink(created_path)
                 except OSError:
                     pass
-            self.notify(f"Library switch failed: {exc}", severity="error", timeout=7)
+            self.push_screen(
+                PreferencesScreen(directory, initial_error=f"Library switch failed: {exc}"),
+                self._change_library,
+            )
             return
 
         self.data_path = destination_path
