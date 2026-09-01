@@ -7,7 +7,7 @@ Install dependencies and run:
 uv run python main.py
 ```
 
-The app auto-creates `gear_data.json` with seeded example data on first run, so you can immediately see the full workflow. Use `uv` (recommended) for automatic environment management; fall back to `pip install -r requirements.txt` if needed.
+On first run the app asks for a storage folder, remembers it in the platform's standard application-config location, and creates `gear_data.json` there with seeded example data. Use `uv` (recommended) for automatic environment management; fall back to `pip install -r requirements.txt` if needed.
 
 ---
 
@@ -21,6 +21,11 @@ The app auto-creates `gear_data.json` with seeded example data on first run, so 
   - Markdown rendering for exports (pack lists and inventory reports)
   - Constants: `CATEGORIES`, `CATEGORY_EMOJI`, `BIG_THREE`, `WEIGHT_TYPES`, thresholds
   - Helper functions: `find_gear()`, `find_trip()`, `compute_trip_summary()`, `total_weight_oz()`, etc.
+
+- **`packrat_preferences.py`** — Cross-platform preference layer. Handles:
+  - OS-standard config and suggested data directories via `platformdirs`
+  - Atomic `preferences.json` reads/writes
+  - Startup precedence between `--data`, remembered storage, and onboarding
 
 - **`gear_tui.py`** — Textual UI layer. Handles:
   - Screens (gear inventory, trips tab, reports tab) and modal dialogs (forms, pickers, confirmations)
@@ -87,6 +92,8 @@ The app auto-creates `gear_data.json` with seeded example data on first run, so 
 ### Data Persistence
 - `load_data(path)` — reads JSON; auto-seeds with `example_data()` if file missing
 - `save_data(path, data)` — atomic writes via temp file (`path + ".tmp"`, then `os.replace()`)
+- The selected folder is remembered outside the repository; its library is always named `gear_data.json`
+- `--data` is an exact-file override for one launch and does not update preferences
 - **No locking** — avoid editing from multiple machines simultaneously or sync conflicts will create backup files
 
 ### Markdown Export
@@ -162,7 +169,7 @@ uv run python main.py
 ## Common Gotchas
 
 - **Modal dialogs cut off:** Terminal too small (need ≥130×42). Zoom or expand window.
-- **Data file not created:** Check write permissions in the working directory.
+- **Data file not created:** Check write permissions in the selected storage folder.
 - **Markdown export missing:** Files go to `exports/` subdirectory auto-created next to `gear_data.json`.
 - **Weight calculations wrong:** Verify `qty` is set (defaults to 1) and `weight_type` matches the calculation logic (base/worn/consumable are summed separately).
 - **Stale UI after edit:** Modal dismisses and returns updated dict; catch with `@on(SomeScreen.ScreenType.Submitted)` or similar pattern.

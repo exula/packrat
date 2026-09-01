@@ -7,20 +7,22 @@ Run:
     python3 gear_tui.py
     python3 gear_tui.py --data /path/to/gear_data.json
 
-Requires: pip install textual (see requirements.txt)
+Requires: pip install textual platformdirs (see requirements.txt)
 """
 
 import argparse
 import copy
 import os
+import tempfile
 from datetime import date
-from typing import Optional
+from typing import Optional, Tuple
 
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
@@ -36,6 +38,7 @@ from textual.widgets import (
 )
 
 import gear_core as gc
+import packrat_preferences as preferences
 
 # ---------------------------------------------------------------------------
 # Styling — dark, outdoors-y palette; mouse hover states come free from
@@ -137,6 +140,34 @@ ModalScreen {
     height: auto;
     max-height: 90%;
     overflow-y: auto;
+}
+
+#setup-dialog {
+    background: #182015;
+    border: thick #4A7856;
+    padding: 2 3;
+    width: 90%;
+    max-width: 76;
+    height: auto;
+}
+
+#setup-dialog Label, #preferences-dialog Label {
+    color: #9AAE8C;
+    padding-top: 1;
+}
+
+#setup-error, #preferences-error {
+    color: #F2A29B;
+    padding: 1 0;
+}
+
+#preferences-dialog {
+    background: #182015;
+    border: thick #4A7856;
+    padding: 1 2;
+    width: 90%;
+    max-width: 76;
+    height: auto;
 }
 
 .picker-dialog {
@@ -715,7 +746,7 @@ class ShortcutHelpScreen(ModalScreen[None]):
         help_text = """[b]Keyboard shortcuts[/b]
 
 [b]Anywhere[/b]       1 / 2 / 3  Switch tabs     /  Search     ?  This help
-                 Ctrl+B  Backup data   Q  Quit
+                 Ctrl+B  Backup data   Ctrl+P  Preferences   Q  Quit
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
 [b]Trips[/b]          A  Add      Enter  Open  D  Duplicate  C  Compare  Delete  Delete
@@ -1365,6 +1396,147 @@ class ReportsPane(Vertical):
 # ---------------------------------------------------------------------------
 
 
+def _prepare_library(directory: str) -> Tuple[str, dict, bool]:
+    """Validate a folder and load or create its Packrat library."""
+    normalized_directory = preferences.normalize_path(directory)
+    if os.path.exists(normalized_directory) and not os.path.isdir(normalized_directory):
+        raise OSError(f"not a folder: {normalized_directory}")
+    os.makedirs(normalized_directory, exist_ok=True)
+
+    descriptor, probe_path = tempfile.mkstemp(prefix=".packrat-write-test.", dir=normalized_directory)
+    os.close(descriptor)
+    os.unlink(probe_path)
+
+    data_path = preferences.data_path_for_directory(normalized_directory)
+    created = not os.path.exists(data_path)
+    if created:
+        data = gc.example_data()
+        gc.save_data(data_path, data)
+    else:
+        data = gc.load_data(data_path)
+    return data_path, data, created
+
+
+class SetupApp(App):
+    """Small bootstrap app shown before a first Packrat library exists."""
+
+    CSS = APP_CSS + "\nScreen { align: center middle; }"
+    TITLE = "Packrat Setup"
+    AUTO_FOCUS = "#setup-folder"
+
+    def __init__(self, initial_error: str = "", preferences_path: Optional[str] = None):
+        super().__init__()
+        self.initial_error = initial_error
+        self.preferences_path = preferences_path
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="setup-dialog"):
+            yield Static("🎒 Welcome to Packrat", classes="dialog-title")
+            yield Static(
+                "Choose where Packrat should keep your gear library. "
+                "New libraries start with clearly labeled example gear."
+            )
+            yield Label("Gear storage folder")
+            yield Input(value=str(preferences.suggested_data_directory()), id="setup-folder")
+            yield Static(self.initial_error, id="setup-error")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Quit", id="setup-quit")
+                yield Button("Use This Folder", id="setup-use", variant="success")
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._select_folder)
+
+    def _select_folder(self) -> None:
+        try:
+            self.query_one("#setup-folder", Input).select_all()
+        except NoMatches:
+            pass
+
+    @on(Input.Submitted, "#setup-folder")
+    def _submit_folder(self) -> None:
+        self._use_folder()
+
+    @on(Button.Pressed, "#setup-use")
+    def _use_folder(self) -> None:
+        directory = self.query_one("#setup-folder", Input).value
+        try:
+            data_path, _data, created = _prepare_library(directory)
+            try:
+                preferences.save_preferences(
+                    os.path.dirname(data_path), path=self.preferences_path
+                )
+            except Exception:
+                if created:
+                    try:
+                        os.unlink(data_path)
+                    except OSError:
+                        pass
+                raise
+        except (OSError, preferences.PreferencesError, gc.DataValidationError) as exc:
+            self.query_one("#setup-error", Static).update(f"Could not use that folder: {exc}")
+            return
+        self.exit(data_path)
+
+    @on(Button.Pressed, "#setup-quit")
+    def _quit_setup(self) -> None:
+        self.exit(None)
+
+
+class PreferencesScreen(ModalScreen[Optional[Tuple[str, str]]]):
+    """Choose whether to open another library or copy the current one."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    AUTO_FOCUS = "#preferences-folder"
+
+    def __init__(self, current_directory: str, initial_error: str = ""):
+        super().__init__()
+        self.current_directory = current_directory
+        self.initial_error = initial_error
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="preferences-dialog"):
+            yield Static("⚙ Storage Preferences", classes="dialog-title")
+            yield Static(
+                "Open a library in another folder, or copy the current library there. "
+                "Packrat never overwrites an existing destination when copying."
+            )
+            yield Label("Gear storage folder")
+            yield Input(value=self.current_directory, id="preferences-folder")
+            yield Static(self.initial_error, id="preferences-error")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="preferences-cancel")
+                yield Button("Open / Create", id="preferences-open", variant="success")
+                yield Button("Copy Current & Switch", id="preferences-copy")
+
+    def on_mount(self) -> None:
+        self.call_after_refresh(self._select_folder)
+
+    def _select_folder(self) -> None:
+        try:
+            self.query_one("#preferences-folder", Input).select_all()
+        except NoMatches:
+            pass
+
+    @on(Input.Submitted, "#preferences-folder")
+    def _submit_folder(self) -> None:
+        self._open()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#preferences-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#preferences-open")
+    def _open(self) -> None:
+        self.dismiss(("open", self.query_one("#preferences-folder", Input).value))
+
+    @on(Button.Pressed, "#preferences-copy")
+    def _copy(self) -> None:
+        self.dismiss(("copy", self.query_one("#preferences-folder", Input).value))
+
+
 class GearTrackerApp(App):
     CSS = APP_CSS
     TITLE = "Backpacking Gear Tracker"
@@ -1375,13 +1547,15 @@ class GearTrackerApp(App):
         Binding("slash", "search", "Search"),
         Binding("question_mark", "show_help", "Help"),
         Binding("ctrl+b", "backup", "Backup"),
+        Binding("ctrl+p", "preferences", "Preferences", priority=True),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
 
-    def __init__(self, data_path: str):
+    def __init__(self, data_path: str, preferences_path: Optional[str] = None):
         super().__init__()
         self.data_path = os.path.abspath(os.path.expanduser(data_path))
+        self.preferences_path = preferences_path
         self.export_dir = gc.export_dir_for_data(self.data_path)
         self.data = gc.load_data(self.data_path)
         if not os.path.exists(self.data_path):
@@ -1417,6 +1591,61 @@ class GearTrackerApp(App):
 
     def action_show_help(self) -> None:
         self.push_screen(ShortcutHelpScreen())
+
+    def action_preferences(self) -> None:
+        self.push_screen(
+            PreferencesScreen(os.path.dirname(self.data_path)),
+            self._change_library,
+        )
+
+    def _change_library(self, result: Optional[Tuple[str, str]]) -> None:
+        if result is None:
+            return
+        operation, directory = result
+        created_path: Optional[str] = None
+        try:
+            normalized_directory = preferences.normalize_path(directory)
+            destination_path = preferences.data_path_for_directory(normalized_directory)
+            if operation == "copy":
+                if os.path.exists(destination_path):
+                    raise FileExistsError(
+                        f"{destination_path} already exists; use Open / Create to open it"
+                    )
+                if os.path.exists(normalized_directory) and not os.path.isdir(normalized_directory):
+                    raise OSError(f"not a folder: {normalized_directory}")
+                os.makedirs(normalized_directory, exist_ok=True)
+                gc.save_data(destination_path, copy.deepcopy(self.data))
+                created_path = destination_path
+                new_data = gc.load_data(destination_path)
+            elif operation == "open":
+                destination_path, new_data, created = _prepare_library(normalized_directory)
+                if created:
+                    created_path = destination_path
+            else:
+                raise ValueError(f"unknown preference operation: {operation}")
+
+            preferences.save_preferences(
+                normalized_directory, path=self.preferences_path
+            )
+        except (OSError, ValueError, preferences.PreferencesError, gc.DataValidationError) as exc:
+            if created_path is not None:
+                try:
+                    os.unlink(created_path)
+                except OSError:
+                    pass
+            self.push_screen(
+                PreferencesScreen(directory, initial_error=f"Library switch failed: {exc}"),
+                self._change_library,
+            )
+            return
+
+        self.data_path = destination_path
+        self.export_dir = gc.export_dir_for_data(destination_path)
+        self.data = new_data
+        self._data_signature = gc.file_signature(destination_path)
+        self._last_saved_data = copy.deepcopy(new_data)
+        self._refresh_tab(self.query_one(TabbedContent).active)
+        self.notify(f"Now using {destination_path}", title="Library changed", timeout=5)
 
     def action_backup(self) -> None:
         try:
@@ -1468,15 +1697,39 @@ class GearTrackerApp(App):
         return path
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Backpacking Gear Tracker (Textual TUI)")
-    parser.add_argument("--data", default=gc.DEFAULT_DATA_PATH,
-                        help="Path to the JSON data file (default: gear_data.json next to this script)")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--data",
+        default=None,
+        help="Path to a JSON data file for this launch only (does not change preferences)",
+    )
+    args = parser.parse_args(argv)
+
+    setup_error = ""
     try:
-        app = GearTrackerApp(args.data)
-    except (OSError, gc.DataValidationError) as exc:
-        parser.error(f"could not load data file: {exc}")
+        data_path = preferences.resolve_startup_data_path(args.data)
+    except preferences.PreferencesError as exc:
+        data_path = None
+        setup_error = f"Your saved preference could not be read: {exc}"
+
+    if data_path is not None:
+        try:
+            app = GearTrackerApp(data_path)
+        except (OSError, gc.DataValidationError) as exc:
+            if args.data is not None:
+                parser.error(f"could not load data file: {exc}")
+            data_path = None
+            setup_error = f"Your remembered library could not be opened: {exc}"
+
+    if data_path is None:
+        data_path = SetupApp(initial_error=setup_error).run()
+        if data_path is None:
+            return
+        try:
+            app = GearTrackerApp(data_path)
+        except (OSError, gc.DataValidationError) as exc:
+            parser.error(f"could not load data file after setup: {exc}")
     app.run()
 
 

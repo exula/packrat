@@ -2,9 +2,11 @@
 
 A mouse-and-keyboard terminal app for tracking backpacking gear and
 building per-trip pack lists, built with [Textual](https://textual.textualize.io).
-Data lives in one JSON file next to the code, so the whole thing is
-portable — drop the folder in iCloud Drive / Dropbox / OneDrive and run it
-from any Mac or Windows machine.
+Data lives in one JSON file in a folder you choose on first launch. Packrat
+remembers that folder in your operating system's standard application-config
+location, so the code and your personal data remain separate. Choose an
+iCloud Drive, Dropbox, or OneDrive folder if you want the library synced
+between Windows, macOS, and Linux computers.
 
 ## Requirements
 
@@ -19,14 +21,19 @@ With `uv` (installs the right Python packages automatically, no manual venv):
 uv run python main.py
 ```
 
+The first launch opens a short setup screen. Accept the suggested
+platform-specific folder or enter another folder; Packrat creates
+`gear_data.json` there with clearly labeled example items.
+
 Without `uv`:
 
 ```bash
-pip install -r requirements.txt   # or: pip install textual
+pip install -r requirements.txt   # or: pip install textual platformdirs
 python3 main.py
 ```
 
-To point at a data file somewhere else (e.g. a specific iCloud folder):
+To use an exact data file for one launch without changing the remembered
+preference:
 
 ```bash
 uv run python main.py --data "/Users/you/Library/Mobile Documents/com~apple~CloudDocs/Gear/gear_data.json"
@@ -38,9 +45,10 @@ uv run python main.py --data "/Users/you/Library/Mobile Documents/com~apple~Clou
 - `gear_tui.py` — the Textual UI: screens, forms, tables, styling.
 - `gear_core.py` — data model, JSON persistence, and Markdown rendering.
   Pure functions, no UI code — this is what generates the pack-list exports.
-- `gear_data.json` — your data. Created automatically on first run if it
-  doesn't exist, seeded with a few example items/trip (clearly labeled) so
-  the format is obvious.
+- `packrat_preferences.py` — cross-platform preference paths and persistence.
+- `gear_data.json` — created in your selected storage folder and seeded with
+  a few example items/trip (clearly labeled) so the format is obvious. The
+  repository copy is not used as the runtime default.
 - `pyproject.toml` / `uv.lock` — project + locked dependencies for `uv`.
 - `requirements.txt` — plain-pip fallback if you're not using `uv`.
 
@@ -58,6 +66,8 @@ are:
   edits an item's quantity/note and **P** opens the pack audit.
 - **Ctrl+S** saves forms and picker dialogs; **Enter** confirms confirmations.
 - **Ctrl+B** writes a manual `.bak` snapshot beside your data file.
+- **Ctrl+P** opens Storage Preferences to open another library or copy the
+  current library to a new folder and switch to it.
 
 - **Click a table row** to select it; **click it again** (or press Enter)
   to open/edit it. This two-step click mirrors how most file browsers work
@@ -98,6 +108,19 @@ that newer copy and rolls the in-memory edit back.
 It is still a flat JSON file rather than a mergeable database. If Packrat
 reports an external-change conflict, restart it to load the newer file before
 editing again.
+
+## Storage preferences
+
+The setup screen and Storage Preferences select a folder; the library inside
+that folder is always named `gear_data.json`. **Open / Create** opens an
+existing valid library or creates a new example library. **Copy Current &
+Switch** copies the active library to an unused destination and leaves the
+original file intact. It will not overwrite an existing destination library.
+
+If the saved preference is damaged or its library cannot be opened, Packrat
+returns to setup with the error instead of silently using another data file.
+The `--data` option remains useful for scripts and one-off libraries and never
+changes the remembered folder by itself.
 
 ## Backing it up
 

@@ -1,18 +1,24 @@
+import copy
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from textual.widgets import Input, TabbedContent
+from textual.widgets import Input, Static, TabbedContent
 
 from gear_tui import (
     GearFormScreen,
     GearTrackerApp,
     PackAuditScreen,
+    PreferencesScreen,
     ShortcutHelpScreen,
+    SetupApp,
     TripComparisonScreen,
     TripDashboardScreen,
     TripItemFormScreen,
 )
+import gear_core as gc
+import packrat_preferences as preferences
 
 
 class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -76,6 +82,156 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 app.screen.query_one("#audit-table").focus()
                 await pilot.press("down", "down", "space", "ctrl+s")
                 self.assertTrue(app.data["trips"][1]["audit"])
+
+
+class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_first_run_creates_example_library_and_remembers_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Path(directory) / "library"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            app = SetupApp(preferences_path=str(preference_path))
+            async with app.run_test(size=(100, 30)) as pilot:
+                folder = app.query_one("#setup-folder", Input)
+                self.assertTrue(folder.has_focus)
+                folder.value = str(storage)
+                await pilot.press("enter")
+
+            data_path = storage / preferences.DATA_FILENAME
+            self.assertTrue(data_path.exists())
+            self.assertTrue(gc.load_data(data_path)["gear"])
+            self.assertEqual(
+                preferences.load_preferences(preference_path),
+                preferences.normalize_path(storage),
+            )
+
+    async def test_first_run_quit_creates_nothing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Path(directory) / "unused-library"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            app = SetupApp(preferences_path=str(preference_path))
+            async with app.run_test(size=(100, 30)) as pilot:
+                app.query_one("#setup-folder", Input).value = str(storage)
+                await pilot.click("#setup-quit")
+
+            self.assertFalse(storage.exists())
+            self.assertFalse(preference_path.exists())
+
+    async def test_open_create_switches_library_and_updates_derived_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original" / "gear.json"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            app = GearTrackerApp(str(original), preferences_path=str(preference_path))
+            destination = Path(directory) / "other"
+
+            async with app.run_test(size=(120, 40)):
+                app._change_library(("open", str(destination)))
+
+                expected = destination / preferences.DATA_FILENAME
+                self.assertEqual(app.data_path, preferences.normalize_path(expected))
+                self.assertEqual(
+                    app.export_dir,
+                    os.path.join(preferences.normalize_path(destination), "exports"),
+                )
+                self.assertEqual(
+                    preferences.load_preferences(preference_path),
+                    preferences.normalize_path(destination),
+                )
+                self.assertTrue(expected.exists())
+
+    async def test_preferences_focuses_folder_and_enter_opens_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original" / "gear.json"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            destination = Path(directory) / "keyboard-library"
+            app = GearTrackerApp(str(original), preferences_path=str(preference_path))
+
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.press("ctrl+p")
+                self.assertIsInstance(app.screen, PreferencesScreen)
+                folder = app.screen.query_one("#preferences-folder", Input)
+                self.assertTrue(folder.has_focus)
+                folder.value = str(destination)
+                await pilot.press("enter")
+
+                self.assertNotIsInstance(app.screen, PreferencesScreen)
+                self.assertEqual(
+                    app.data_path,
+                    preferences.data_path_for_directory(destination),
+                )
+
+    async def test_copy_switch_preserves_source_and_refuses_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source" / "gear.json"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            app = GearTrackerApp(str(source), preferences_path=str(preference_path))
+            app.data["gear"][0]["name"] = "Current library marker"
+            self.assertTrue(app.save())
+            source_before = source.read_text(encoding="utf-8")
+            destination = Path(directory) / "copy"
+
+            async with app.run_test(size=(120, 40)):
+                app._change_library(("copy", str(destination)))
+                copied_path = destination / preferences.DATA_FILENAME
+                self.assertEqual(gc.load_data(copied_path)["gear"][0]["name"], "Current library marker")
+                self.assertEqual(source.read_text(encoding="utf-8"), source_before)
+
+                first_destination_data = copy.deepcopy(app.data)
+                second_destination = Path(directory) / "occupied"
+                second_destination.mkdir()
+                occupied_path = second_destination / preferences.DATA_FILENAME
+                gc.save_data(occupied_path, gc.blank_data())
+                current_path = app.data_path
+                app._change_library(("copy", str(second_destination)))
+                self.assertEqual(app.data_path, current_path)
+                self.assertEqual(app.data, first_destination_data)
+                self.assertEqual(gc.load_data(occupied_path)["gear"], [])
+
+    async def test_invalid_library_rolls_back_path_data_and_preference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source" / "gear.json"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            app = GearTrackerApp(str(source), preferences_path=str(preference_path))
+            preferences.save_preferences(source.parent, preference_path)
+            original_data = copy.deepcopy(app.data)
+            invalid_directory = Path(directory) / "invalid"
+            invalid_directory.mkdir()
+            (invalid_directory / preferences.DATA_FILENAME).write_text("{bad json", encoding="utf-8")
+
+            async with app.run_test(size=(120, 40)) as pilot:
+                app._change_library(("open", str(invalid_directory)))
+                await pilot.pause()
+                self.assertEqual(app.data_path, preferences.normalize_path(source))
+                self.assertEqual(app.data, original_data)
+                self.assertEqual(
+                    preferences.load_preferences(preference_path),
+                    preferences.normalize_path(source.parent),
+                )
+                self.assertIsInstance(app.screen, PreferencesScreen)
+                self.assertEqual(
+                    app.screen.query_one("#preferences-folder", Input).value,
+                    str(invalid_directory),
+                )
+                self.assertIn(
+                    "Library switch failed",
+                    str(app.screen.query_one("#preferences-error", Static).render()),
+                )
+
+    async def test_preference_write_failure_removes_new_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source" / "gear.json"
+            blocking_file = Path(directory) / "not-a-config-directory"
+            blocking_file.write_text("blocked", encoding="utf-8")
+            preference_path = blocking_file / "preferences.json"
+            app = GearTrackerApp(str(source), preferences_path=str(preference_path))
+            destination = Path(directory) / "destination"
+            original_path = app.data_path
+            original_data = copy.deepcopy(app.data)
+
+            async with app.run_test(size=(120, 40)):
+                app._change_library(("copy", str(destination)))
+                self.assertEqual(app.data_path, original_path)
+                self.assertEqual(app.data, original_data)
+                self.assertFalse((destination / preferences.DATA_FILENAME).exists())
 
 
 if __name__ == "__main__":
