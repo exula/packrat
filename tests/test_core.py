@@ -30,9 +30,28 @@ class DataValidationTests(unittest.TestCase):
         duplicate_id["gear"][1]["id"] = duplicate_id["gear"][0]["id"]
         cases.append(duplicate_id)
 
+        bad_trip_qty = copy.deepcopy(self.data)
+        bad_trip_qty["trips"][0]["items"][0]["qty"] = 0
+        cases.append(bad_trip_qty)
+
+        bad_audit = copy.deepcopy(self.data)
+        bad_audit["trips"][0]["audit"] = {"Water": "probably"}
+        cases.append(bad_audit)
+
         for invalid_data in cases:
             with self.subTest(data=invalid_data), self.assertRaises(gc.DataValidationError):
                 gc.validate_data(invalid_data)
+
+    def test_legacy_trip_quantities_are_migrated_without_weight_changes(self):
+        data = gc.example_data()
+        gear = data["gear"][0]
+        gear["qty"] = 3
+        entry = data["trips"][0]["items"][0]
+        entry.pop("qty")
+        gc.validate_data(data)
+        self.assertEqual(entry["qty"], 3)
+        self.assertEqual(data["meta"]["version"], gc.DATA_VERSION)
+        self.assertEqual(gc.compute_trip_summary(data, data["trips"][0])["rows"][0]["total_oz"], 90)
 
     def test_load_reports_json_location(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -79,6 +98,67 @@ class SummaryTests(unittest.TestCase):
         summary = gc.compute_trip_summary(data, data["trips"][0])
         self.assertEqual(summary["missing_gear_ids"], ["G999"])
         self.assertIn("no longer exists", gc.render_trip_markdown(data, data["trips"][0]))
+
+    def test_trip_quantity_overrides_inventory_quantity(self):
+        data = gc.example_data()
+        gear = data["gear"][2]
+        gear["qty"] = 8
+        entry = data["trips"][0]["items"][2]
+        entry["qty"] = 2
+        summary = gc.compute_trip_summary(data, data["trips"][0])
+        row = next(row for row in summary["rows"] if row["gear"]["id"] == gear["id"])
+        self.assertEqual(row["trip_qty"], 2)
+        self.assertEqual(row["total_oz"], 5.2)
+        self.assertIn("×2", gc.render_trip_markdown(data, data["trips"][0]))
+
+    def test_review_candidates_remain_in_export_with_pack_audit(self):
+        data = gc.example_data()
+        candidate = data["gear"][5]
+        candidate["weight_oz"] = 9
+        data["trips"][0]["items"].append({"gear_id": candidate["id"], "qty": 1, "note": ""})
+        export = gc.render_trip_markdown(data, data["trips"][0])
+        self.assertIn("## ⚠️ Review Candidates", export)
+        self.assertIn("Low usefulness rating and meaningful weight", export)
+        self.assertLess(export.index("## ⚠️ Review Candidates"), export.index("## Pack Audit"))
+
+
+class PlanningWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.data = gc.example_data()
+        self.trip = self.data["trips"][0]
+
+    def test_duplicate_trip_is_independent_and_gets_next_id(self):
+        duplicate = gc.duplicate_trip(self.data, self.trip)
+        self.assertEqual(duplicate["id"], "T002")
+        self.assertEqual(duplicate["name"], f"{self.trip['name']} (Copy)")
+        duplicate["items"][0]["qty"] = 9
+        duplicate["audit"]["Water"] = "omitted"
+        self.assertEqual(self.trip["items"][0]["qty"], 1)
+        self.assertNotIn("Water", self.trip["audit"])
+
+    def test_compare_trips_reports_membership_quantity_and_weight_deltas(self):
+        duplicate = gc.duplicate_trip(self.data, self.trip, "Alternative")
+        duplicate["items"] = duplicate["items"][1:]
+        duplicate["items"][0]["qty"] = 2
+        duplicate["items"].append({"gear_id": "G006", "qty": 1, "note": ""})
+        comparison = gc.compare_trips(self.data, self.trip, duplicate)
+        self.assertEqual([row["gear_id"] for row in comparison["removed"]], ["G001"])
+        self.assertEqual([row["gear_id"] for row in comparison["added"]], ["G006"])
+        self.assertEqual(comparison["changed"][0]["gear_id"], "G002")
+        self.assertEqual(comparison["changed"][0]["delta_oz"], 29.0)
+        self.assertNotEqual(comparison["base_delta_lb"], 0)
+
+    def test_pack_audit_distinguishes_packed_resolved_and_unresolved(self):
+        self.trip["audit"] = {"Hygiene": "covered", "Repair/Tools": "omitted"}
+        audit = gc.compute_pack_audit(self.data, self.trip)
+        statuses = {row["category"]: row["status"] for row in audit["rows"]}
+        self.assertEqual(statuses["Shelter"], "packed")
+        self.assertEqual(statuses["Hygiene"], "covered")
+        self.assertEqual(statuses["Repair/Tools"], "omitted")
+        self.assertEqual(statuses["Miscellaneous"], "unresolved")
+        export = gc.render_trip_markdown(self.data, self.trip)
+        self.assertIn("## Pack Audit", export)
+        self.assertIn("intentionally omitted", export)
 
 
 if __name__ == "__main__":

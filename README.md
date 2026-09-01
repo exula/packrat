@@ -54,6 +54,8 @@ are:
 - **/** focuses the search box; **Esc** clears search and returns to the table.
 - **A** adds, **E** edits, **Delete** deletes/removes, and **R** toggles review
   candidates when the relevant table is focused.
+- In Trips, **D** duplicates and **C** compares. In a trip dashboard, **I**
+  edits an item's quantity/note and **P** opens the pack audit.
 - **Ctrl+S** saves forms and picker dialogs; **Enter** confirms confirmations.
 - **Ctrl+B** writes a manual `.bak` snapshot beside your data file.
 
@@ -67,8 +69,18 @@ are:
 - **Trips tab** — click a trip to open its dashboard: live weight summary,
   a colored category-weight bar chart, and the assigned-gear list. Add or
   remove items right there; the same gear item can be on any number of
-  trips without affecting the others. Every trip you've ever planned stays
-  in the file — full history, nothing gets overwritten.
+  trips without affecting the others. Quantities and notes are trip-specific,
+  so a two-night plan can carry fewer consumables than a week-long plan
+  without changing Gear Inventory.
+- **Loadout variants** — select a trip and choose **Duplicate** (`D`) to make
+  an independent copy. Choose **Compare** (`C`) to see base/skin-out weight,
+  category, gear, and quantity differences between two trip plans.
+- **Pack audit** — open a trip and choose **Pack Audit** (`P`). Categories
+  represented by assigned gear are automatic; absent categories can be marked
+  covered elsewhere, intentionally omitted, or left unresolved. This is a
+  planning aid, not a universal safety prescription.
+- **Trip history** — every trip you've planned stays in the file until you
+  delete it; duplicating and editing a loadout never overwrites its source.
 - **Reports tab** — export any trip's pack list, or the whole inventory,
   to a polished Markdown file (weight summary, category breakdown with a
   bar chart, heaviest items, review candidates, and a checkbox pack list)
@@ -99,5 +111,9 @@ Run the core and headless Textual tests with:
 ```bash
 uv run python -m unittest discover -s tests -v
 ```
+
+The suite covers JSON migration and validation, persistence, trip-specific
+weight calculations, duplication, comparisons, pack-audit logic, Markdown
+exports, and headless keyboard workflows.
 
 The same suite runs on Python 3.9 and 3.12 for every pull request.

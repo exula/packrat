@@ -4,7 +4,15 @@ from pathlib import Path
 
 from textual.widgets import Input, TabbedContent
 
-from gear_tui import GearFormScreen, GearTrackerApp, ShortcutHelpScreen
+from gear_tui import (
+    GearFormScreen,
+    GearTrackerApp,
+    PackAuditScreen,
+    ShortcutHelpScreen,
+    TripComparisonScreen,
+    TripDashboardScreen,
+    TripItemFormScreen,
+)
 
 
 class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -39,6 +47,35 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("t", "e", "s", "t", "ctrl+s")
                 self.assertEqual(len(app.data["gear"]), starting_count + 1)
                 self.assertEqual(app.data["gear"][-1]["name"], "test")
+
+    async def test_duplicate_compare_quantity_and_audit_workflow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            async with app.run_test(size=(140, 48)) as pilot:
+                await pilot.press("2")
+                app.query_one("#trip-table").focus()
+                await pilot.press("d")
+                self.assertEqual(len(app.data["trips"]), 2)
+                self.assertTrue(app.data["trips"][1]["name"].endswith("(Copy)"))
+
+                await pilot.press("c")
+                self.assertIsInstance(app.screen, TripComparisonScreen)
+                await pilot.press("escape")
+
+                await pilot.click("#trip-open")
+                self.assertIsInstance(app.screen, TripDashboardScreen)
+                app.screen.query_one("#dash-items-table").focus()
+                await pilot.press("i")
+                self.assertIsInstance(app.screen, TripItemFormScreen)
+                app.screen.query_one("#ti-qty", Input).value = "3"
+                await pilot.press("ctrl+s")
+                self.assertEqual(app.data["trips"][1]["items"][0]["qty"], 3)
+
+                await pilot.press("p")
+                self.assertIsInstance(app.screen, PackAuditScreen)
+                app.screen.query_one("#audit-table").focus()
+                await pilot.press("down", "down", "space", "ctrl+s")
+                self.assertTrue(app.data["trips"][1]["audit"])
 
 
 if __name__ == "__main__":

@@ -433,8 +433,13 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
             yield Label("Add Gear to Trip — click a row to add it", classes="dialog-title")
             yield Input(placeholder="Search gear...", id="gp-search")
             yield DataTable(id="gp-table", cursor_type="row", zebra_stripes=True)
-            yield Label("Trip-specific note (optional, applies to the item you add)")
-            yield Input(id="gp-note", placeholder="e.g. borrowed, worn not packed")
+            with Horizontal(classes="field-row"):
+                with Vertical(classes="field-col"):
+                    yield Label("Trip quantity")
+                    yield Input(value="1", id="gp-qty", type="integer")
+                with Vertical(classes="field-col"):
+                    yield Label("Trip-specific note (optional)")
+                    yield Input(id="gp-note", placeholder="e.g. borrowed, worn not packed")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="gp-cancel")
                 yield Button("Add Selected", id="gp-add", variant="success")
@@ -481,8 +486,7 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
 
     @on(DataTable.RowSelected, "#gp-table")
     def _row_selected(self, event: DataTable.RowSelected) -> None:
-        note = self.query_one("#gp-note", Input).value.strip()
-        self.dismiss((event.row_key.value, note))
+        self._dismiss_selection(event.row_key.value)
 
     @on(Button.Pressed, "#gp-add")
     def _add(self) -> None:
@@ -490,8 +494,215 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
         if gear_id is None:
             self.app.notify("No gear left to add (or nothing matches your search)", severity="warning")
             return
+        self._dismiss_selection(gear_id)
+
+    def _dismiss_selection(self, gear_id: str) -> None:
+        try:
+            qty = int(self.query_one("#gp-qty", Input).value or 1)
+        except ValueError:
+            qty = 0
+        if qty < 1:
+            self.app.notify("Trip quantity must be at least 1", severity="error")
+            return
         note = self.query_one("#gp-note", Input).value.strip()
-        self.dismiss((gear_id, note))
+        self.dismiss((gear_id, qty, note))
+
+
+class TripItemFormScreen(ModalScreen[Optional[dict]]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
+
+    def __init__(self, gear: dict, entry: dict):
+        super().__init__()
+        self.gear = gear
+        self.entry = entry
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog", classes="form-dialog"):
+            yield Label(f"Edit trip item: {self.gear['name']}", classes="dialog-title")
+            yield Label(f"Inventory weight per unit: {self.gear['weight_oz']:.1f} oz")
+            yield Label("Trip quantity")
+            yield Input(value=str(self.entry.get("qty", self.gear.get("qty", 1))),
+                        id="ti-qty", type="integer")
+            yield Label("Trip-specific note")
+            yield Input(value=self.entry.get("note", ""), id="ti-note")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="ti-cancel")
+                yield Button("Save", id="ti-save", variant="success")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_save(self) -> None:
+        self._save()
+
+    @on(Button.Pressed, "#ti-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#ti-save")
+    def _save(self) -> None:
+        try:
+            qty = int(self.query_one("#ti-qty", Input).value or 0)
+        except ValueError:
+            qty = 0
+        if qty < 1:
+            self.app.notify("Trip quantity must be at least 1", severity="error")
+            return
+        self.dismiss({"qty": qty, "note": self.query_one("#ti-note", Input).value.strip()})
+
+
+class PackAuditScreen(ModalScreen[Optional[dict]]):
+    """Let the user resolve categories that are not represented by gear."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("space", "cycle", "Cycle status"),
+        Binding("ctrl+s", "save", "Save"),
+    ]
+
+    def __init__(self, data: dict, trip: dict):
+        super().__init__()
+        self.data = data
+        self.trip = trip
+        self.audit = copy.deepcopy(trip.get("audit", {}))
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog", classes="picker-dialog"):
+            yield Label("Pack Audit", classes="dialog-title")
+            yield Static("Packed categories are automatic. For anything absent, mark it covered "
+                         "elsewhere, intentionally omitted, or leave it unresolved.")
+            yield DataTable(id="audit-table", cursor_type="row", zebra_stripes=True)
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cycle Status", id="audit-cycle", variant="primary")
+                yield Button("Cancel", id="audit-cancel")
+                yield Button("Save", id="audit-save", variant="success")
+
+    def on_mount(self) -> None:
+        self.query_one("#audit-table", DataTable).add_columns("Category", "Status")
+        self._refresh()
+
+    def _audit_summary(self) -> dict:
+        temporary = copy.deepcopy(self.trip)
+        temporary["audit"] = self.audit
+        return gc.compute_pack_audit(self.data, temporary)
+
+    def _refresh(self) -> None:
+        table = self.query_one("#audit-table", DataTable)
+        selected = None
+        if table.row_count:
+            try:
+                selected = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+            except Exception:
+                pass
+        table.clear()
+        for row in self._audit_summary()["rows"]:
+            table.add_row(row["category"], row["status"].replace("_", " ").title(),
+                          key=row["category"])
+        if selected:
+            table.move_cursor(row=table.get_row_index(selected), animate=False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_cycle(self) -> None:
+        self._cycle()
+
+    def action_save(self) -> None:
+        self.dismiss({key: value for key, value in self.audit.items() if value != "unresolved"})
+
+    @on(Button.Pressed, "#audit-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#audit-save")
+    def _save(self) -> None:
+        self.action_save()
+
+    @on(Button.Pressed, "#audit-cycle")
+    @on(DataTable.RowSelected, "#audit-table")
+    def _cycle(self) -> None:
+        table = self.query_one("#audit-table", DataTable)
+        if not table.row_count:
+            return
+        category = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+        row = next(row for row in self._audit_summary()["rows"] if row["category"] == category)
+        if row["status"] == "packed":
+            self.app.notify("This category is represented by assigned gear", timeout=2)
+            return
+        cycle = {"unresolved": "covered", "covered": "omitted", "omitted": "unresolved"}
+        self.audit[category] = cycle[row["status"]]
+        self._refresh()
+
+
+class TripComparisonScreen(Screen):
+    BINDINGS = [Binding("escape", "go_back", "Back"), Binding("b", "go_back", "Back")]
+
+    def __init__(self, data: dict, left_trip_id: str):
+        super().__init__()
+        self.data = data
+        self.left_trip_id = left_trip_id
+        self.other_trips = [trip for trip in data["trips"] if trip["id"] != left_trip_id]
+
+    def compose(self) -> ComposeResult:
+        left = gc.find_trip(self.data, self.left_trip_id)
+        options = [(trip["name"], trip["id"]) for trip in self.other_trips]
+        yield Header(show_clock=True, time_format="%I:%M %p")
+        with VerticalScroll(id="dash-scroll"):
+            yield Static(f"Compare against: {left['name']}", classes="dash-title")
+            yield Select(options, value=options[0][1], allow_blank=False, id="compare-trip")
+            yield Static(id="compare-summary", classes="panel")
+            yield Static("Category Changes (comparison minus baseline)", classes="section-title")
+            yield DataTable(id="compare-categories", cursor_type="none", zebra_stripes=True)
+            yield Static("Gear Changes", classes="section-title")
+            yield DataTable(id="compare-items", cursor_type="none", zebra_stripes=True)
+            with Horizontal(classes="toolbar"):
+                yield Button("← Back", id="compare-back")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#compare-categories", DataTable).add_columns("Category", "Delta (oz)")
+        self.query_one("#compare-items", DataTable).add_columns(
+            "Change", "Category", "Item", "Qty", "Delta (oz)")
+        self._refresh(self.other_trips[0]["id"])
+
+    @on(Select.Changed, "#compare-trip")
+    def _selection_changed(self, event: Select.Changed) -> None:
+        if event.value != Select.BLANK:
+            self._refresh(str(event.value))
+
+    def _refresh(self, right_trip_id: str) -> None:
+        left = gc.find_trip(self.data, self.left_trip_id)
+        right = gc.find_trip(self.data, right_trip_id)
+        comparison = gc.compare_trips(self.data, left, right)
+        self.query_one("#compare-summary", Static).update(
+            f"[b]{right['name']}[/b] compared with [b]{left['name']}[/b]\n"
+            f"Base: {comparison['left']['base_lb']:.2f} → {comparison['right']['base_lb']:.2f} lb "
+            f"({comparison['base_delta_lb']:+.2f} lb)   "
+            f"Skin-out: {comparison['left']['total_lb']:.2f} → "
+            f"{comparison['right']['total_lb']:.2f} lb ({comparison['total_delta_lb']:+.2f} lb)")
+        categories = self.query_one("#compare-categories", DataTable)
+        categories.clear()
+        for category, delta in sorted(comparison["category_deltas"].items(),
+                                      key=lambda item: -abs(item[1])):
+            categories.add_row(category, f"{delta:+.1f}")
+        items = self.query_one("#compare-items", DataTable)
+        items.clear()
+        for row in comparison["added"]:
+            items.add_row("Added", row["category"], row["name"], str(row["qty"]),
+                          f"+{row['total_oz']:.1f}")
+        for row in comparison["removed"]:
+            items.add_row("Removed", row["category"], row["name"], str(row["qty"]),
+                          f"-{row['total_oz']:.1f}")
+        for row in comparison["changed"]:
+            items.add_row("Quantity", row["category"], row["name"],
+                          f"{row['left_qty']}→{row['right_qty']}", f"{row['delta_oz']:+.1f}")
+
+    def action_go_back(self) -> None:
+        self.dismiss()
+
+    @on(Button.Pressed, "#compare-back")
+    def _back(self) -> None:
+        self.dismiss()
 
 
 class ShortcutHelpScreen(ModalScreen[None]):
@@ -507,8 +718,9 @@ class ShortcutHelpScreen(ModalScreen[None]):
                  Ctrl+B  Backup data   Q  Quit
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
-[b]Trips[/b]          A  Add      Enter  Open  Delete  Delete
-[b]Trip dashboard[/b] A  Add item E  Edit trip Delete  Remove     X  Export
+[b]Trips[/b]          A  Add      Enter  Open  D  Duplicate  C  Compare  Delete  Delete
+[b]Trip dashboard[/b] A  Add item I  Edit qty/note E  Edit trip P  Pack audit
+                 Delete  Remove     X  Export
 [b]Dialogs[/b]        Ctrl+S  Save/add          Esc  Cancel
 [b]Confirmations[/b]  Enter  Confirm            Esc  Cancel
 
@@ -536,7 +748,9 @@ class TripDashboardScreen(Screen):
         Binding("escape", "go_back", "Back"),
         Binding("b", "go_back", "Back"),
         Binding("a", "add_item", "Add item"),
+        Binding("i", "edit_item", "Edit item"),
         Binding("e", "edit_trip", "Edit trip"),
+        Binding("p", "pack_audit", "Pack audit"),
         Binding("delete", "remove_item", "Remove"),
         Binding("x", "export", "Export"),
     ]
@@ -557,7 +771,9 @@ class TripDashboardScreen(Screen):
             yield DataTable(id="dash-items-table", cursor_type="row", zebra_stripes=True)
             with Horizontal(classes="toolbar"):
                 yield Button("+ Add Item", id="dash-add-item", variant="success")
+                yield Button("Edit Qty/Note", id="dash-edit-item", variant="primary")
                 yield Button("Remove Selected", id="dash-remove-item", variant="error")
+                yield Button("Pack Audit", id="dash-audit", variant="primary")
                 yield Button("Edit Trip Info", id="dash-edit-trip", variant="primary")
                 yield Button("Export to Markdown", id="dash-export", variant="primary")
                 yield Button("← Back", id="dash-back")
@@ -567,7 +783,7 @@ class TripDashboardScreen(Screen):
         self.query_one("#dash-cat-table", DataTable).add_columns(
             "Category", "Wt (oz)", "Wt (lb)", "Distribution")
         self.query_one("#dash-items-table", DataTable).add_columns(
-            "ID", "Category", "Item", "Wt (oz)", "Flag", "Note")
+            "ID", "Category", "Item", "Qty", "Wt (oz)", "Flag", "Note")
         self.refresh_dashboard()
 
     def refresh_dashboard(self) -> None:
@@ -601,6 +817,11 @@ class TripDashboardScreen(Screen):
                          f"({big3_pct:.0f}% of total)")
         if trip.get("notes"):
             lines.append(f"[dim]{trip['notes']}[/dim]")
+        audit = s["audit"]
+        if audit["unresolved"]:
+            lines.append(f"[#E0B46A]Pack audit: {audit['unresolved']} unresolved categories[/#E0B46A]")
+        else:
+            lines.append("[#7CD992]Pack audit resolved[/#7CD992]")
         self.query_one("#dash-summary", Static).update("\n".join(lines))
 
         cat_table = self.query_one("#dash-cat-table", DataTable)
@@ -616,7 +837,8 @@ class TripDashboardScreen(Screen):
         for row in sorted(s["rows"], key=lambda r: -r["total_oz"]):
             g = row["gear"]
             flag = "REVIEW" if row["review_flag"] else ""
-            items_table.add_row(g["id"], g["category"], g["name"], f"{row['total_oz']:.1f}",
+            items_table.add_row(g["id"], g["category"], g["name"], str(row["trip_qty"]),
+                                f"{row['total_oz']:.1f}",
                                 flag, row["trip_note"], key=g["id"])
 
     def action_go_back(self) -> None:
@@ -625,8 +847,14 @@ class TripDashboardScreen(Screen):
     def action_add_item(self) -> None:
         self._add_item()
 
+    def action_edit_item(self) -> None:
+        self._edit_item()
+
     def action_edit_trip(self) -> None:
         self._edit_trip()
+
+    def action_pack_audit(self) -> None:
+        self._pack_audit()
 
     def action_remove_item(self) -> None:
         self._remove_item()
@@ -655,14 +883,49 @@ class TripDashboardScreen(Screen):
 
         def handle(result):
             if result:
-                gear_id, note = result
-                trip["items"].append({"gear_id": gear_id, "note": note})
+                gear_id, qty, note = result
+                trip["items"].append({"gear_id": gear_id, "qty": qty, "note": note})
                 if not app.save():
                     return
                 self.refresh_dashboard()
                 self.app.notify("Added to trip", severity="information", timeout=2)
 
         self.app.push_screen(GearPickerScreen(app.data["gear"], exclude), handle)
+
+    @on(Button.Pressed, "#dash-edit-item")
+    def _edit_item(self) -> None:
+        gear_id = self._current_item_gear_id()
+        if gear_id is None:
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        trip = gc.find_trip(app.data, self.trip_id)
+        gear = gc.find_gear(app.data, gear_id)
+        entry = next(item for item in trip["items"] if item["gear_id"] == gear_id)
+
+        def handle(result):
+            if result:
+                entry.update(result)
+                if not app.save():
+                    self.refresh_dashboard()
+                    return
+                self.refresh_dashboard()
+
+        self.app.push_screen(TripItemFormScreen(gear, entry), handle)
+
+    @on(Button.Pressed, "#dash-audit")
+    def _pack_audit(self) -> None:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        trip = gc.find_trip(app.data, self.trip_id)
+
+        def handle(result):
+            if result is not None:
+                trip["audit"] = result
+                if not app.save():
+                    self.refresh_dashboard()
+                    return
+                self.refresh_dashboard()
+
+        self.app.push_screen(PackAuditScreen(app.data, trip), handle)
 
     @on(Button.Pressed, "#dash-remove-item")
     def _remove_item(self) -> None:
@@ -883,6 +1146,8 @@ class TripsPane(Vertical):
     BINDINGS = [
         Binding("a", "add", "Add"),
         Binding("enter", "open", "Open"),
+        Binding("d", "duplicate", "Duplicate"),
+        Binding("c", "compare", "Compare"),
         Binding("delete", "delete", "Delete"),
         Binding("escape", "clear_search", "Clear search", show=False),
     ]
@@ -894,6 +1159,8 @@ class TripsPane(Vertical):
         yield DataTable(id="trip-table", cursor_type="row", zebra_stripes=True)
         with Horizontal(classes="toolbar"):
             yield Button("Open Dashboard", id="trip-open", variant="primary")
+            yield Button("Duplicate", id="trip-duplicate", variant="primary")
+            yield Button("Compare", id="trip-compare", variant="primary")
             yield Button("Delete", id="trip-delete", variant="error")
             yield Static(id="trip-status", classes="status")
 
@@ -943,6 +1210,12 @@ class TripsPane(Vertical):
     def action_delete(self) -> None:
         self._delete()
 
+    def action_duplicate(self) -> None:
+        self._duplicate()
+
+    def action_compare(self) -> None:
+        self._compare()
+
     def action_clear_search(self) -> None:
         search = self.query_one("#trip-search", Input)
         search.value = ""
@@ -986,6 +1259,34 @@ class TripsPane(Vertical):
     @on(Button.Pressed, "#trip-open")
     def _open_button(self) -> None:
         self._open_dashboard(self._current_trip_id())
+
+    @on(Button.Pressed, "#trip-duplicate")
+    def _duplicate(self) -> None:
+        trip_id = self._current_trip_id()
+        if trip_id is None:
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        source = gc.find_trip(app.data, trip_id)
+        duplicate = gc.duplicate_trip(app.data, source)
+        app.data["trips"].append(duplicate)
+        if not app.save():
+            self.refresh_table()
+            return
+        self.refresh_table(self.query_one("#trip-search", Input).value)
+        self.query_one("#trip-table", DataTable).move_cursor(
+            row=self.query_one("#trip-table", DataTable).get_row_index(duplicate["id"]), animate=False)
+        self.app.notify(f"Created {duplicate['name']}", timeout=3)
+
+    @on(Button.Pressed, "#trip-compare")
+    def _compare(self) -> None:
+        trip_id = self._current_trip_id()
+        if trip_id is None:
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        if len(app.data["trips"]) < 2:
+            self.app.notify("Duplicate or add another trip before comparing", severity="warning")
+            return
+        self.app.push_screen(TripComparisonScreen(app.data, trip_id))
 
     @on(Button.Pressed, "#trip-delete")
     def _delete(self) -> None:

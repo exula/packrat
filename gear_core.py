@@ -5,6 +5,7 @@ no print(), no Textual imports) so it can be driven by the TUI, a future
 CLI, or a test script without dragging in a terminal.
 """
 
+import copy
 import json
 import math
 import os
@@ -31,7 +32,8 @@ BIG_THREE = {"Shelter", "Sleep System", "Pack"}
 
 REVIEW_WEIGHT_THRESHOLD_OZ = 8.0
 REVIEW_USEFULNESS_THRESHOLD = 3
-DATA_VERSION = 1
+AUDIT_STATUSES = ("covered", "omitted", "unresolved")
+DATA_VERSION = 2
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DATA_PATH = os.path.join(SCRIPT_DIR, "gear_data.json")
@@ -91,12 +93,13 @@ def example_data():
          "target_base_weight_lb": 15.0,
          "notes": "Mt. Rogers / Grayson Highlands / Wilburn Ridge loop, ~35 mi",
          "created": date.today().isoformat(),
+         "audit": {},
          "items": [
-             {"gear_id": "G001", "note": ""},
-             {"gear_id": "G002", "note": ""},
-             {"gear_id": "G003", "note": ""},
-             {"gear_id": "G004", "note": ""},
-             {"gear_id": "G005", "note": "Worn, not packed"},
+             {"gear_id": "G001", "qty": 1, "note": ""},
+             {"gear_id": "G002", "qty": 1, "note": ""},
+             {"gear_id": "G003", "qty": 1, "note": ""},
+             {"gear_id": "G004", "qty": 1, "note": ""},
+             {"gear_id": "G005", "qty": 1, "note": "Worn, not packed"},
          ]},
     ]
     return data
@@ -174,6 +177,7 @@ def validate_data(data):
                 f"{label}.weight_type must be one of: {', '.join(WEIGHT_TYPES)}"
             )
 
+    gear_by_id = {gear["id"]: gear for gear in data["gear"]}
     trip_ids = set()
     for index, trip in enumerate(data["trips"]):
         label = f"trips[{index}]"
@@ -195,6 +199,16 @@ def validate_data(data):
         target = trip.setdefault("target_base_weight_lb", None)
         if target is not None:
             _number(target, f"{label}.target_base_weight_lb")
+        audit = trip.setdefault("audit", {})
+        if not isinstance(audit, dict):
+            raise DataValidationError(f"{label}.audit must be an object")
+        for category, status in audit.items():
+            if category not in CATEGORIES:
+                raise DataValidationError(f"{label}.audit contains unknown category: {category}")
+            if status not in AUDIT_STATUSES:
+                raise DataValidationError(
+                    f"{label}.audit.{category} must be one of: {', '.join(AUDIT_STATUSES)}"
+                )
         if not isinstance(trip.setdefault("items", []), list):
             raise DataValidationError(f"{label}.items must be a list")
         assigned = set()
@@ -208,9 +222,14 @@ def validate_data(data):
             if gear_id in assigned:
                 raise DataValidationError(f"{label} assigns gear {gear_id} more than once")
             assigned.add(gear_id)
+            default_qty = gear_by_id.get(gear_id, {}).get("qty", 1)
+            qty = _number(entry.setdefault("qty", default_qty), f"{entry_label}.qty", minimum=1)
+            if not isinstance(qty, int):
+                raise DataValidationError(f"{entry_label}.qty must be an integer")
             entry.setdefault("note", "")
             if not isinstance(entry["note"], str):
                 raise DataValidationError(f"{entry_label}.note must be a string")
+    data["meta"]["version"] = DATA_VERSION
     return data
 
 
@@ -336,6 +355,11 @@ def total_weight_lb(item):
     return round(total_weight_oz(item) / 16, 4)
 
 
+def trip_item_weight_oz(gear, entry):
+    """Return the per-trip weight using the assignment quantity."""
+    return round(gear["weight_oz"] * entry.get("qty", gear.get("qty", 1)), 3)
+
+
 def is_review_flagged(item):
     return (item["usefulness"] < REVIEW_USEFULNESS_THRESHOLD
             and total_weight_oz(item) > REVIEW_WEIGHT_THRESHOLD_OZ)
@@ -343,6 +367,92 @@ def is_review_flagged(item):
 
 def trips_referencing_gear(data, gear_id):
     return [t for t in data["trips"] if any(i["gear_id"] == gear_id for i in t["items"])]
+
+
+def duplicate_trip(data, trip, name=None):
+    """Return an independent copy of a trip with a fresh identity."""
+    duplicate = copy.deepcopy(trip)
+    duplicate["id"] = next_id(data["trips"], "T")
+    duplicate["name"] = name or f"{trip['name']} (Copy)"
+    duplicate["created"] = date.today().isoformat()
+    return duplicate
+
+
+def compute_pack_audit(data, trip):
+    """Report category coverage without pretending every category is required."""
+    packed_categories = {
+        gear["category"]
+        for entry in trip["items"]
+        for gear in [find_gear(data, entry["gear_id"])]
+        if gear is not None
+    }
+    saved = trip.get("audit", {})
+    rows = []
+    for category in CATEGORIES:
+        status = "packed" if category in packed_categories else saved.get(category, "unresolved")
+        rows.append({"category": category, "status": status})
+    return {
+        "rows": rows,
+        "packed": sum(row["status"] == "packed" for row in rows),
+        "covered": sum(row["status"] == "covered" for row in rows),
+        "omitted": sum(row["status"] == "omitted" for row in rows),
+        "unresolved": sum(row["status"] == "unresolved" for row in rows),
+    }
+
+
+def compare_trips(data, left, right):
+    """Compare two loadouts by weight, category, membership, and quantity."""
+    left_summary = compute_trip_summary(data, left)
+    right_summary = compute_trip_summary(data, right)
+    left_items = {entry["gear_id"]: entry for entry in left["items"]}
+    right_items = {entry["gear_id"]: entry for entry in right["items"]}
+
+    def item_row(gear_id, entry, side):
+        gear = find_gear(data, gear_id)
+        return {
+            "gear_id": gear_id,
+            "name": gear["name"] if gear else gear_id,
+            "category": gear["category"] if gear else "Missing",
+            "qty": entry.get("qty", gear.get("qty", 1) if gear else 1),
+            "total_oz": trip_item_weight_oz(gear, entry) if gear else 0.0,
+            "side": side,
+        }
+
+    added = [item_row(gid, right_items[gid], "right") for gid in right_items.keys() - left_items.keys()]
+    removed = [item_row(gid, left_items[gid], "left") for gid in left_items.keys() - right_items.keys()]
+    changed = []
+    for gid in left_items.keys() & right_items.keys():
+        gear = find_gear(data, gid)
+        if gear is None:
+            continue
+        left_qty = left_items[gid].get("qty", gear.get("qty", 1))
+        right_qty = right_items[gid].get("qty", gear.get("qty", 1))
+        if left_qty != right_qty:
+            changed.append({
+                "gear_id": gid,
+                "name": gear["name"],
+                "category": gear["category"],
+                "left_qty": left_qty,
+                "right_qty": right_qty,
+                "delta_oz": round((right_qty - left_qty) * gear["weight_oz"], 3),
+            })
+
+    category_deltas = {}
+    for category in CATEGORIES:
+        delta = right_summary["category_oz"].get(category, 0) - left_summary["category_oz"].get(category, 0)
+        if delta:
+            category_deltas[category] = round(delta, 2)
+
+    return {
+        "left": left_summary,
+        "right": right_summary,
+        "base_delta_lb": round(right_summary["base_lb"] - left_summary["base_lb"], 3),
+        "total_delta_lb": round(right_summary["total_lb"] - left_summary["total_lb"], 3),
+        "category_deltas": category_deltas,
+        "added": sorted(added, key=lambda row: (-row["total_oz"], row["name"])),
+        "removed": sorted(removed, key=lambda row: (-row["total_oz"], row["name"])),
+        "changed": sorted(changed, key=lambda row: (-abs(row["delta_oz"]), row["name"])),
+    }
 
 
 def compute_trip_summary(data, trip):
@@ -357,7 +467,7 @@ def compute_trip_summary(data, trip):
         if gear is None:
             missing.append(entry["gear_id"])
             continue
-        oz = total_weight_oz(gear)
+        oz = trip_item_weight_oz(gear, entry)
         if gear["weight_type"] == "Base Weight":
             base_oz += oz
         elif gear["weight_type"] == "Worn Weight":
@@ -370,6 +480,7 @@ def compute_trip_summary(data, trip):
         rows.append({
             "gear": gear,
             "trip_note": entry.get("note", ""),
+            "trip_qty": entry.get("qty", gear.get("qty", 1)),
             "total_oz": oz,
             "review_flag": is_review_flagged(gear),
         })
@@ -402,6 +513,8 @@ def compute_trip_summary(data, trip):
         "rows_by_weight": rows_sorted_by_weight,
         "missing_gear_ids": missing,
         "item_count": len(rows),
+        "unit_count": sum(row["trip_qty"] for row in rows),
+        "audit": compute_pack_audit(data, trip),
     }
 
 
@@ -430,7 +543,10 @@ def render_trip_markdown(data, trip):
     meta_bits = []
     if trip.get("dates"):
         meta_bits.append(f"**{trip['dates']}**")
-    meta_bits.append(f"{s['item_count']} items")
+    item_label = f"{s['item_count']} gear items"
+    if s["unit_count"] != s["item_count"]:
+        item_label += f" / {s['unit_count']} total units"
+    meta_bits.append(item_label)
     if s["target_lb"]:
         meta_bits.append(f"target base **{s['target_lb']:.1f} lb**")
     add(" · ".join(meta_bits))
@@ -502,6 +618,18 @@ def render_trip_markdown(data, trip):
             add(f"- **{g['name']}** — {row['total_oz']:.1f} oz, usefulness {g['usefulness']}/5")
         add("")
 
+    # --- Pack audit ---------------------------------------------------------
+    audit = s["audit"]
+    add("## Pack Audit")
+    add("")
+    add(f"{audit['packed']} represented · {audit['covered']} covered elsewhere · "
+        f"{audit['omitted']} intentionally omitted · {audit['unresolved']} unresolved")
+    add("")
+    unresolved = [row["category"] for row in audit["rows"] if row["status"] == "unresolved"]
+    if unresolved:
+        add("Unresolved categories: " + ", ".join(unresolved))
+        add("")
+
     # --- Pack list ----------------------------------------------------------
     add("## Pack List")
     add("")
@@ -519,7 +647,7 @@ def render_trip_markdown(data, trip):
         for row in sorted(by_cat[cat], key=lambda r: -r["total_oz"]):
             g = row["gear"]
             brand = f" ({g['brand']})" if g.get("brand") else ""
-            qty = f" ×{g['qty']}" if g["qty"] > 1 else ""
+            qty = f" ×{row['trip_qty']}" if row["trip_qty"] > 1 else ""
             flag = " ⚠️" if row["review_flag"] else ""
             note = f" — _{row['trip_note']}_" if row["trip_note"] else ""
             add(f"- [ ] {g['name']}{brand}{qty} — {row['total_oz']:.1f} oz{note}{flag}")
