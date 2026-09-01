@@ -57,7 +57,7 @@ class PreferencePersistenceTests(unittest.TestCase):
             preference_path = Path(directory) / "preferences.json"
             override = Path(directory) / "one-off.json"
             resolved = preferences.resolve_startup_data_path(override, preference_path)
-            self.assertEqual(resolved, str(override.resolve()))
+            self.assertEqual(resolved, preferences.normalize_path(override))
             self.assertFalse(preference_path.exists())
 
     def test_remembered_directory_resolves_fixed_filename(self):
@@ -67,7 +67,7 @@ class PreferencePersistenceTests(unittest.TestCase):
             preferences.save_preferences(data_directory, preference_path)
             self.assertEqual(
                 preferences.resolve_startup_data_path(None, preference_path),
-                str((data_directory / preferences.DATA_FILENAME).resolve()),
+                preferences.data_path_for_directory(data_directory),
             )
 
 

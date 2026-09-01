@@ -1,4 +1,5 @@
 import copy
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -95,7 +96,10 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
             data_path = storage / preferences.DATA_FILENAME
             self.assertTrue(data_path.exists())
             self.assertTrue(gc.load_data(data_path)["gear"])
-            self.assertEqual(preferences.load_preferences(preference_path), str(storage.resolve()))
+            self.assertEqual(
+                preferences.load_preferences(preference_path),
+                preferences.normalize_path(storage),
+            )
 
     async def test_first_run_quit_creates_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -120,9 +124,15 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 app._change_library(("open", str(destination)))
 
                 expected = destination / preferences.DATA_FILENAME
-                self.assertEqual(Path(app.data_path), expected.resolve())
-                self.assertEqual(Path(app.export_dir), destination.resolve() / "exports")
-                self.assertEqual(preferences.load_preferences(preference_path), str(destination.resolve()))
+                self.assertEqual(app.data_path, preferences.normalize_path(expected))
+                self.assertEqual(
+                    app.export_dir,
+                    os.path.join(preferences.normalize_path(destination), "exports"),
+                )
+                self.assertEqual(
+                    preferences.load_preferences(preference_path),
+                    preferences.normalize_path(destination),
+                )
                 self.assertTrue(expected.exists())
 
     async def test_copy_switch_preserves_source_and_refuses_overwrite(self):
@@ -165,9 +175,12 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
             async with app.run_test(size=(120, 40)):
                 app._change_library(("open", str(invalid_directory)))
-                self.assertEqual(Path(app.data_path), source.resolve())
+                self.assertEqual(app.data_path, preferences.normalize_path(source))
                 self.assertEqual(app.data, original_data)
-                self.assertEqual(preferences.load_preferences(preference_path), str(source.parent.resolve()))
+                self.assertEqual(
+                    preferences.load_preferences(preference_path),
+                    preferences.normalize_path(source.parent),
+                )
 
     async def test_preference_write_failure_removes_new_destination(self):
         with tempfile.TemporaryDirectory() as directory:
