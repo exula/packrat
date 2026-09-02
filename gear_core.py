@@ -34,6 +34,7 @@ REVIEW_WEIGHT_THRESHOLD_OZ = 8.0
 REVIEW_USEFULNESS_THRESHOLD = 3
 AUDIT_STATUSES = ("covered", "omitted", "unresolved")
 DATA_VERSION = 2
+GRAMS_PER_OUNCE = 28.349523125
 
 class DataValidationError(ValueError):
     """Raised when a data file doesn't match Packrat's expected schema."""
@@ -350,6 +351,16 @@ def total_weight_lb(item):
     return round(total_weight_oz(item) / 16, 4)
 
 
+def format_weight_oz(ounces, signed=False):
+    """Format an ounce value in all display units without changing storage."""
+    sign = "+" if signed else ""
+    return (
+        f"{format(ounces, sign + '.1f')} oz · "
+        f"{format(ounces / 16, sign + '.2f')} lb · "
+        f"{format(ounces * GRAMS_PER_OUNCE, sign + '.1f')} g"
+    )
+
+
 def trip_item_weight_oz(gear, entry):
     """Return the per-trip weight using the assignment quantity."""
     return round(gear["weight_oz"] * entry.get("qty", gear.get("qty", 1)), 3)
@@ -543,7 +554,7 @@ def render_trip_markdown(data, trip):
         item_label += f" / {s['unit_count']} total units"
     meta_bits.append(item_label)
     if s["target_lb"]:
-        meta_bits.append(f"target base **{s['target_lb']:.1f} lb**")
+        meta_bits.append(f"target base **{format_weight_oz(s['target_lb'] * 16)}**")
     add(" · ".join(meta_bits))
     add("")
     if trip.get("notes"):
@@ -556,15 +567,21 @@ def render_trip_markdown(data, trip):
     status_line = ""
     if s["delta_lb"] is not None:
         if s["delta_lb"] <= 0:
-            status_line = f"✅ **{abs(s['delta_lb']):.2f} lb under** your {s['target_lb']:.1f} lb base weight target"
+            status_line = (
+                f"✅ **{format_weight_oz(abs(s['delta_lb']) * 16)} under** your "
+                f"{format_weight_oz(s['target_lb'] * 16)} base weight target"
+            )
         else:
-            status_line = f"⚠️ **{s['delta_lb']:.2f} lb over** your {s['target_lb']:.1f} lb base weight target"
+            status_line = (
+                f"⚠️ **{format_weight_oz(s['delta_lb'] * 16)} over** your "
+                f"{format_weight_oz(s['target_lb'] * 16)} base weight target"
+            )
     add("| | Weight |")
     add("|---|---:|")
-    add(f"| **Base weight** | **{s['base_lb']:.2f} lb** ({s['base_oz']:.1f} oz) |")
-    add(f"| Worn weight | {s['worn_lb']:.2f} lb ({s['worn_oz']:.1f} oz) |")
-    add(f"| Consumable weight | {s['consumable_lb']:.2f} lb ({s['consumable_oz']:.1f} oz) |")
-    add(f"| **Total pack weight** (skin-out) | **{s['total_lb']:.2f} lb** ({s['total_oz']:.1f} oz) |")
+    add(f"| **Base weight** | **{format_weight_oz(s['base_oz'])}** |")
+    add(f"| Worn weight | {format_weight_oz(s['worn_oz'])} |")
+    add(f"| Consumable weight | {format_weight_oz(s['consumable_oz'])} |")
+    add(f"| **Total pack weight** (skin-out) | **{format_weight_oz(s['total_oz'])}** |")
     if s["total_cost"]:
         add(f"| Total gear cost | ${s['total_cost']:,.2f} |")
     add("")
@@ -575,7 +592,7 @@ def render_trip_markdown(data, trip):
     if s["category_oz"] and s["base_oz"] + s["worn_oz"] + s["consumable_oz"] > 0:
         big3_pct = pct(s["big_three_oz"], s["total_oz"])
         add(f"**The Big Three** (shelter + sleep system + pack): "
-            f"**{s['big_three_lb']:.2f} lb** — {big3_pct:.0f}% of total pack weight")
+            f"**{format_weight_oz(s['big_three_oz'])}** — {big3_pct:.0f}% of total pack weight")
         add("")
 
     # --- Weight distribution ------------------------------------------------
@@ -588,7 +605,7 @@ def render_trip_markdown(data, trip):
         for cat, oz in sorted(s["category_oz"].items(), key=lambda kv: -kv[1]):
             pct_of_max = pct(oz, max_oz)
             emoji = CATEGORY_EMOJI.get(cat, "")
-            add(f"| {emoji} {cat} | {oz:.1f} oz | {pct(oz, s['total_oz']):.0f}% | `{bar(pct_of_max)}` |")
+            add(f"| {emoji} {cat} | {format_weight_oz(oz)} | {pct(oz, s['total_oz']):.0f}% | `{bar(pct_of_max)}` |")
         add("")
 
     # --- Heaviest items -------------------------------------------------
@@ -598,7 +615,7 @@ def render_trip_markdown(data, trip):
         add("")
         for i, row in enumerate(heaviest, start=1):
             g = row["gear"]
-            add(f"{i}. **{g['name']}** — {row['total_oz']:.1f} oz ({g['category']})")
+            add(f"{i}. **{g['name']}** — {format_weight_oz(row['total_oz'])} ({g['category']})")
         add("")
 
     # --- Review candidates -------------------------------------------------
@@ -610,7 +627,7 @@ def render_trip_markdown(data, trip):
         add("")
         for row in sorted(review_rows, key=lambda r: -r["total_oz"]):
             g = row["gear"]
-            add(f"- **{g['name']}** — {row['total_oz']:.1f} oz, usefulness {g['usefulness']}/5")
+            add(f"- **{g['name']}** — {format_weight_oz(row['total_oz'])}, usefulness {g['usefulness']}/5")
         add("")
 
     # --- Pack audit ---------------------------------------------------------
@@ -637,7 +654,7 @@ def render_trip_markdown(data, trip):
             continue
         cat_oz = sum(r["total_oz"] for r in by_cat[cat])
         emoji = CATEGORY_EMOJI.get(cat, "")
-        add(f"### {emoji} {cat} — {cat_oz:.1f} oz ({cat_oz/16:.2f} lb)")
+        add(f"### {emoji} {cat} — {format_weight_oz(cat_oz)}")
         add("")
         for row in sorted(by_cat[cat], key=lambda r: -r["total_oz"]):
             g = row["gear"]
@@ -645,7 +662,7 @@ def render_trip_markdown(data, trip):
             qty = f" ×{row['trip_qty']}" if row["trip_qty"] > 1 else ""
             flag = " ⚠️" if row["review_flag"] else ""
             note = f" — _{row['trip_note']}_" if row["trip_note"] else ""
-            add(f"- [ ] {g['name']}{brand}{qty} — {row['total_oz']:.1f} oz{note}{flag}")
+            add(f"- [ ] {g['name']}{brand}{qty} — {format_weight_oz(row['total_oz'])}{note}{flag}")
         add("")
 
     if s["missing_gear_ids"]:
@@ -669,7 +686,7 @@ def render_inventory_markdown(data):
 
     add("# 🎒 Gear Inventory")
     add("")
-    add(f"{len(gear)} items · {total_oz_all:.1f} oz total ({total_oz_all/16:.2f} lb) "
+    add(f"{len(gear)} items · {format_weight_oz(total_oz_all)} total "
         f"· ${total_cost_all:,.2f} total value")
     add("")
     add(f"*Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
@@ -691,7 +708,7 @@ def render_inventory_markdown(data):
                 continue
             oz = cat_totals[cat]
             emoji = CATEGORY_EMOJI.get(cat, "")
-            add(f"| {emoji} {cat} | {oz:.1f} oz | {pct(oz, total_oz_all):.0f}% | "
+            add(f"| {emoji} {cat} | {format_weight_oz(oz)} | {pct(oz, total_oz_all):.0f}% | "
                 f"`{bar(pct(oz, max_oz))}` |")
         add("")
 
@@ -700,7 +717,7 @@ def render_inventory_markdown(data):
         add("## ⚠️ Review Candidates")
         add("")
         for g in sorted(flagged, key=lambda x: -total_weight_oz(x)):
-            add(f"- **{g['name']}** — {total_weight_oz(g):.1f} oz, usefulness {g['usefulness']}/5")
+            add(f"- **{g['name']}** — {format_weight_oz(total_weight_oz(g))}, usefulness {g['usefulness']}/5")
         add("")
 
     add("## Full Inventory")
@@ -710,14 +727,14 @@ def render_inventory_markdown(data):
             continue
         cat_oz = cat_totals[cat]
         emoji = CATEGORY_EMOJI.get(cat, "")
-        add(f"### {emoji} {cat} — {cat_oz:.1f} oz ({cat_oz/16:.2f} lb)")
+        add(f"### {emoji} {cat} — {format_weight_oz(cat_oz)}")
         add("")
-        add("| Item | Brand | Wt (oz) | Type | Qty | Useful. | Cost | |")
+        add("| Item | Brand | Weight | Type | Qty | Useful. | Cost | |")
         add("|---|---|---:|---|---:|---:|---:|---|")
         for g in sorted(by_cat[cat], key=lambda x: -total_weight_oz(x)):
             flag = "⚠️" if is_review_flagged(g) else ""
             cost = f"${g['cost']:,.2f}" if g.get("cost") else ""
-            add(f"| {g['name']} | {g.get('brand','')} | {total_weight_oz(g):.1f} | "
+            add(f"| {g['name']} | {g.get('brand','')} | {format_weight_oz(total_weight_oz(g))} | "
                 f"{g['weight_type']} | {g['qty']} | {g['usefulness']}/5 | {cost} | {flag} |")
         add("")
 

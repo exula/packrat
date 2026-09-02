@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from textual.widgets import Input, Static, TabbedContent
+from textual.widgets import Button, Input, Label, Static, TabbedContent
 
 from gear_tui import (
     GearFormScreen,
@@ -53,6 +53,29 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("t", "e", "s", "t", "ctrl+s")
                 self.assertEqual(len(app.data["gear"]), starting_count + 1)
                 self.assertEqual(app.data["gear"][-1]["name"], "test")
+
+    async def test_compact_gear_form_keeps_actions_visible_and_previews_weight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            starting_count = len(app.data["gear"])
+            async with app.run_test(size=(70, 20)) as pilot:
+                app.query_one("#gear-table").focus()
+                await pilot.press("a")
+                form = app.screen
+                form.query_one("#f-name", Input).value = "Compact test"
+                form.query_one("#f-weight", Input).value = "16"
+                await pilot.pause()
+
+                preview = str(form.query_one("#f-weight-conversion", Label).render())
+                self.assertIn("16.0 oz · 1.00 lb · 453.6 g", preview)
+                save = form.query_one("#f-save", Button)
+                form.query_one("#gear-form-fields").scroll_end(animate=False)
+                await pilot.pause()
+                self.assertTrue(save.is_on_screen)
+
+                await pilot.click("#f-save")
+                self.assertEqual(len(app.data["gear"]), starting_count + 1)
+                self.assertEqual(app.data["gear"][-1]["weight_oz"], 16.0)
 
     async def test_duplicate_compare_quantity_and_audit_workflow(self):
         with tempfile.TemporaryDirectory() as directory:
