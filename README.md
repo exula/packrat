@@ -75,7 +75,10 @@ are:
   item by accident.
 - **Gear Inventory tab** — search, add, edit, delete gear. The "Review
   Candidates" button filters to items rated low usefulness (<3/5) *and*
-  over 8 oz — good first candidates to cut.
+  over 8 oz — good first candidates to cut. Enter each item's per-unit weight
+  in ounces; Packrat immediately previews and displays the equivalent ounces,
+  pounds, and grams throughout the app and its exports. Save and Cancel remain
+  visible while long gear forms scroll on compact terminals.
 - **Trips tab** — click a trip to open its dashboard: live weight summary,
   a colored category-weight bar chart, and the assigned-gear list. Add or
   remove items right there; the same gear item can be on any number of

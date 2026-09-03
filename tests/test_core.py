@@ -92,6 +92,13 @@ class PersistenceTests(unittest.TestCase):
 
 
 class SummaryTests(unittest.TestCase):
+    def test_weight_formatter_converts_and_signs_all_units(self):
+        self.assertEqual(gc.format_weight_oz(0), "0.0 oz · 0.00 lb · 0.0 g")
+        self.assertEqual(gc.format_weight_oz(16), "16.0 oz · 1.00 lb · 453.6 g")
+        self.assertEqual(gc.format_weight_oz(2.6), "2.6 oz · 0.16 lb · 73.7 g")
+        self.assertEqual(gc.format_weight_oz(-1, signed=True), "-1.0 oz · -0.06 lb · -28.3 g")
+        self.assertEqual(gc.format_weight_oz(1, signed=True), "+1.0 oz · +0.06 lb · +28.3 g")
+
     def test_missing_gear_is_reported_without_breaking_summary(self):
         data = gc.example_data()
         data["trips"][0]["items"].append({"gear_id": "G999", "note": "missing"})
@@ -120,6 +127,17 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("## ⚠️ Review Candidates", export)
         self.assertIn("Low usefulness rating and meaningful weight", export)
         self.assertLess(export.index("## ⚠️ Review Candidates"), export.index("## Pack Audit"))
+
+    def test_markdown_exports_show_ounces_pounds_and_grams(self):
+        data = gc.example_data()
+        for export in (
+            gc.render_trip_markdown(data, data["trips"][0]),
+            gc.render_inventory_markdown(data),
+        ):
+            with self.subTest(export=export[:40]):
+                self.assertIn(" oz · ", export)
+                self.assertIn(" lb · ", export)
+                self.assertIn(" g", export)
 
 
 class PlanningWorkflowTests(unittest.TestCase):

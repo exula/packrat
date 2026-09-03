@@ -12,6 +12,7 @@ Requires: pip install textual platformdirs (see requirements.txt)
 
 import argparse
 import copy
+import math
 import os
 import tempfile
 from datetime import date
@@ -201,6 +202,21 @@ ModalScreen {
     padding-top: 1;
 }
 
+#dialog.gear-form-dialog {
+    height: 90%;
+    overflow-y: hidden;
+}
+
+#gear-form-fields {
+    height: 1fr;
+    padding-right: 1;
+}
+
+#f-weight-conversion {
+    color: #C7D7BC;
+    padding-top: 0;
+}
+
 .field-row {
     height: auto;
 }
@@ -301,41 +317,60 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
 
     def compose(self) -> ComposeResult:
         title = "Add Gear Item" if self.mode == "add" else f"Edit: {self.initial.get('name','')}"
-        with Vertical(id="dialog", classes="form-dialog"):
+        with Vertical(id="dialog", classes="form-dialog gear-form-dialog"):
             yield Label(title, classes="dialog-title")
-            yield Label("Category")
-            yield Select([(c, c) for c in gc.CATEGORIES], id="f-category", allow_blank=False,
-                         value=self.initial.get("category", gc.CATEGORIES[0]))
-            yield Label("Item Name")
-            yield Input(value=self.initial.get("name", ""), id="f-name", placeholder="e.g. Solo Tent")
-            yield Label("Brand / Model")
-            yield Input(value=self.initial.get("brand", ""), id="f-brand", placeholder="e.g. Big Agnes Copper Spur")
-            with Horizontal(classes="field-row"):
-                with Vertical(classes="field-col"):
-                    yield Label("Weight (oz)")
-                    yield Input(value=str(self.initial.get("weight_oz", "")), id="f-weight", type="number")
-                with Vertical(classes="field-col"):
-                    yield Label("Qty")
-                    yield Input(value=str(self.initial.get("qty", 1)), id="f-qty", type="integer")
-            yield Label("Weight Type")
-            yield Select([(t, t) for t in gc.WEIGHT_TYPES], id="f-type", allow_blank=False,
-                         value=self.initial.get("weight_type", "Base Weight"))
-            with Horizontal(classes="field-row"):
-                with Vertical(classes="field-col"):
-                    yield Label("Usefulness (1-5)")
-                    yield Select([(str(i), i) for i in range(1, 6)], id="f-usefulness", allow_blank=False,
-                                 value=self.initial.get("usefulness", 3))
-                with Vertical(classes="field-col"):
-                    yield Label("Cost ($)")
-                    yield Input(value=str(self.initial.get("cost", 0)), id="f-cost", type="number")
-            yield Label("Notes")
-            yield Input(value=self.initial.get("notes", ""), id="f-notes")
+            with VerticalScroll(id="gear-form-fields"):
+                yield Label("Category")
+                yield Select([(c, c) for c in gc.CATEGORIES], id="f-category", allow_blank=False,
+                             value=self.initial.get("category", gc.CATEGORIES[0]))
+                yield Label("Item Name")
+                yield Input(value=self.initial.get("name", ""), id="f-name", placeholder="e.g. Solo Tent")
+                yield Label("Brand / Model")
+                yield Input(value=self.initial.get("brand", ""), id="f-brand", placeholder="e.g. Big Agnes Copper Spur")
+                with Horizontal(classes="field-row"):
+                    with Vertical(classes="field-col"):
+                        yield Label("Weight per unit (oz)")
+                        yield Input(value=str(self.initial.get("weight_oz", "")), id="f-weight", type="number")
+                        yield Label("Enter ounces to see conversions", id="f-weight-conversion")
+                    with Vertical(classes="field-col"):
+                        yield Label("Qty")
+                        yield Input(value=str(self.initial.get("qty", 1)), id="f-qty", type="integer")
+                yield Label("Weight Type")
+                yield Select([(t, t) for t in gc.WEIGHT_TYPES], id="f-type", allow_blank=False,
+                             value=self.initial.get("weight_type", "Base Weight"))
+                with Horizontal(classes="field-row"):
+                    with Vertical(classes="field-col"):
+                        yield Label("Usefulness (1-5)")
+                        yield Select([(str(i), i) for i in range(1, 6)], id="f-usefulness", allow_blank=False,
+                                     value=self.initial.get("usefulness", 3))
+                    with Vertical(classes="field-col"):
+                        yield Label("Cost ($)")
+                        yield Input(value=str(self.initial.get("cost", 0)), id="f-cost", type="number")
+                yield Label("Notes")
+                yield Input(value=self.initial.get("notes", ""), id="f-notes")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="f-cancel")
                 yield Button("Save", id="f-save", variant="success")
 
     def on_mount(self) -> None:
+        self._update_weight_conversion(self.query_one("#f-weight", Input).value)
         self.query_one("#f-name", Input).focus()
+
+    @on(Input.Changed, "#f-weight")
+    def _weight_changed(self, event: Input.Changed) -> None:
+        self._update_weight_conversion(event.value)
+
+    def _update_weight_conversion(self, value: str) -> None:
+        preview = self.query_one("#f-weight-conversion", Label)
+        try:
+            ounces = float(value)
+        except ValueError:
+            preview.update("Enter ounces to see conversions")
+            return
+        if not math.isfinite(ounces) or ounces < 0:
+            preview.update("Weight must be a finite, non-negative number")
+            return
+        preview.update(gc.format_weight_oz(ounces) + " per unit")
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -477,7 +512,7 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
 
     def on_mount(self) -> None:
         table = self.query_one("#gp-table", DataTable)
-        table.add_columns("ID", "Category", "Item", "Wt (oz)")
+        table.add_columns("ID", "Category", "Item", "Weight")
         self._refresh("")
         self.query_one("#gp-search", Input).focus()
 
@@ -490,7 +525,8 @@ class GearPickerScreen(ModalScreen[Optional[tuple]]):
                 continue
             if t and t not in gear_search_blob(g):
                 continue
-            table.add_row(g["id"], g["category"], g["name"], f"{gc.total_weight_oz(g):.1f}", key=g["id"])
+            table.add_row(g["id"], g["category"], g["name"],
+                          gc.format_weight_oz(gc.total_weight_oz(g)), key=g["id"])
 
     @on(Input.Changed, "#gp-search")
     def _search(self, event: Input.Changed) -> None:
@@ -550,7 +586,7 @@ class TripItemFormScreen(ModalScreen[Optional[dict]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog", classes="form-dialog"):
             yield Label(f"Edit trip item: {self.gear['name']}", classes="dialog-title")
-            yield Label(f"Inventory weight per unit: {self.gear['weight_oz']:.1f} oz")
+            yield Label(f"Inventory weight per unit: {gc.format_weight_oz(self.gear['weight_oz'])}")
             yield Label("Trip quantity")
             yield Input(value=str(self.entry.get("qty", self.gear.get("qty", 1))),
                         id="ti-qty", type="integer")
@@ -691,9 +727,9 @@ class TripComparisonScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#compare-categories", DataTable).add_columns("Category", "Delta (oz)")
+        self.query_one("#compare-categories", DataTable).add_columns("Category", "Weight change")
         self.query_one("#compare-items", DataTable).add_columns(
-            "Change", "Category", "Item", "Qty", "Delta (oz)")
+            "Change", "Category", "Item", "Qty", "Weight change")
         self._refresh(self.other_trips[0]["id"])
 
     @on(Select.Changed, "#compare-trip")
@@ -705,28 +741,33 @@ class TripComparisonScreen(Screen):
         left = gc.find_trip(self.data, self.left_trip_id)
         right = gc.find_trip(self.data, right_trip_id)
         comparison = gc.compare_trips(self.data, left, right)
+        base_delta_oz = comparison["right"]["base_oz"] - comparison["left"]["base_oz"]
+        total_delta_oz = comparison["right"]["total_oz"] - comparison["left"]["total_oz"]
         self.query_one("#compare-summary", Static).update(
             f"[b]{right['name']}[/b] compared with [b]{left['name']}[/b]\n"
-            f"Base: {comparison['left']['base_lb']:.2f} → {comparison['right']['base_lb']:.2f} lb "
-            f"({comparison['base_delta_lb']:+.2f} lb)   "
-            f"Skin-out: {comparison['left']['total_lb']:.2f} → "
-            f"{comparison['right']['total_lb']:.2f} lb ({comparison['total_delta_lb']:+.2f} lb)")
+            f"Base: {gc.format_weight_oz(comparison['left']['base_oz'])} → "
+            f"{gc.format_weight_oz(comparison['right']['base_oz'])} "
+            f"({gc.format_weight_oz(base_delta_oz, signed=True)})\n"
+            f"Skin-out: {gc.format_weight_oz(comparison['left']['total_oz'])} → "
+            f"{gc.format_weight_oz(comparison['right']['total_oz'])} "
+            f"({gc.format_weight_oz(total_delta_oz, signed=True)})")
         categories = self.query_one("#compare-categories", DataTable)
         categories.clear()
         for category, delta in sorted(comparison["category_deltas"].items(),
                                       key=lambda item: -abs(item[1])):
-            categories.add_row(category, f"{delta:+.1f}")
+            categories.add_row(category, gc.format_weight_oz(delta, signed=True))
         items = self.query_one("#compare-items", DataTable)
         items.clear()
         for row in comparison["added"]:
             items.add_row("Added", row["category"], row["name"], str(row["qty"]),
-                          f"+{row['total_oz']:.1f}")
+                          gc.format_weight_oz(row["total_oz"], signed=True))
         for row in comparison["removed"]:
             items.add_row("Removed", row["category"], row["name"], str(row["qty"]),
-                          f"-{row['total_oz']:.1f}")
+                          gc.format_weight_oz(-row["total_oz"], signed=True))
         for row in comparison["changed"]:
             items.add_row("Quantity", row["category"], row["name"],
-                          f"{row['left_qty']}→{row['right_qty']}", f"{row['delta_oz']:+.1f}")
+                          f"{row['left_qty']}→{row['right_qty']}",
+                          gc.format_weight_oz(row["delta_oz"], signed=True))
 
     def action_go_back(self) -> None:
         self.dismiss()
@@ -812,9 +853,9 @@ class TripDashboardScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#dash-cat-table", DataTable).add_columns(
-            "Category", "Wt (oz)", "Wt (lb)", "Distribution")
+            "Category", "Weight", "Distribution")
         self.query_one("#dash-items-table", DataTable).add_columns(
-            "ID", "Category", "Item", "Qty", "Wt (oz)", "Flag", "Note")
+            "ID", "Category", "Item", "Qty", "Weight", "Flag", "Note")
         self.refresh_dashboard()
 
     def refresh_dashboard(self) -> None:
@@ -829,22 +870,23 @@ class TripDashboardScreen(Screen):
             f"🏔️  {trip['name']}" + (f"  ·  {trip['dates']}" if trip.get("dates") else ""))
 
         lines = [
-            f"Base [b]{s['base_lb']:.2f} lb[/b] ({s['base_oz']:.1f} oz)   "
-            f"Worn {s['worn_oz']:.1f} oz   Consumable {s['consumable_oz']:.1f} oz   "
-            f"Total [b]{s['total_lb']:.2f} lb[/b] skin-out"
+            f"Base [b]{gc.format_weight_oz(s['base_oz'])}[/b]\n"
+            f"Worn {gc.format_weight_oz(s['worn_oz'])}\n"
+            f"Consumable {gc.format_weight_oz(s['consumable_oz'])}\n"
+            f"Total [b]{gc.format_weight_oz(s['total_oz'])}[/b] skin-out"
         ]
         if s["target_lb"]:
             if s["delta_lb"] <= 0:
-                lines.append(f"[#7CD992]{abs(s['delta_lb']):.2f} lb under target "
-                             f"({s['target_lb']:.1f} lb)[/#7CD992]")
+                lines.append(f"[#7CD992]{gc.format_weight_oz(abs(s['delta_lb']) * 16)} under target "
+                             f"({gc.format_weight_oz(s['target_lb'] * 16)})[/#7CD992]")
             else:
-                lines.append(f"[#E08B6A]{s['delta_lb']:.2f} lb OVER target "
-                             f"({s['target_lb']:.1f} lb)[/#E08B6A]")
+                lines.append(f"[#E08B6A]{gc.format_weight_oz(s['delta_lb'] * 16)} OVER target "
+                             f"({gc.format_weight_oz(s['target_lb'] * 16)})[/#E08B6A]")
         else:
             lines.append("[dim]No target base weight set for this trip.[/dim]")
         if s["category_oz"] and s["total_oz"]:
             big3_pct = s["big_three_oz"] / s["total_oz"] * 100
-            lines.append(f"Big Three (shelter + sleep + pack): {s['big_three_lb']:.2f} lb "
+            lines.append(f"Big Three (shelter + sleep + pack): {gc.format_weight_oz(s['big_three_oz'])} "
                          f"({big3_pct:.0f}% of total)")
         if trip.get("notes"):
             lines.append(f"[dim]{trip['notes']}[/dim]")
@@ -861,7 +903,7 @@ class TripDashboardScreen(Screen):
             max_oz = max(s["category_oz"].values())
             for cat, oz in sorted(s["category_oz"].items(), key=lambda kv: -kv[1]):
                 pct = (oz / max_oz * 100) if max_oz else 0
-                cat_table.add_row(cat, f"{oz:.1f}", f"{oz/16:.2f}", colored_bar(pct, width=20))
+                cat_table.add_row(cat, gc.format_weight_oz(oz), colored_bar(pct, width=20))
 
         items_table = self.query_one("#dash-items-table", DataTable)
         items_table.clear()
@@ -869,7 +911,7 @@ class TripDashboardScreen(Screen):
             g = row["gear"]
             flag = "REVIEW" if row["review_flag"] else ""
             items_table.add_row(g["id"], g["category"], g["name"], str(row["trip_qty"]),
-                                f"{row['total_oz']:.1f}",
+                                gc.format_weight_oz(row["total_oz"]),
                                 flag, row["trip_note"], key=g["id"])
 
     def action_go_back(self) -> None:
@@ -1029,7 +1071,7 @@ class GearPane(Vertical):
 
     def on_mount(self) -> None:
         table = self.query_one("#gear-table", DataTable)
-        table.add_columns("ID", "Category", "Item", "Wt (oz)", "Type", "Qty", "Use", "Flag")
+        table.add_columns("ID", "Category", "Item", "Weight", "Type", "Qty", "Use", "Flag")
         self.refresh_table()
 
     def refresh_table(self, filter_text: str = "", review_only: bool = False) -> None:
@@ -1047,7 +1089,7 @@ class GearPane(Vertical):
             if t and t not in gear_search_blob(g):
                 continue
             flag = "REVIEW" if gc.is_review_flagged(g) else ""
-            table.add_row(g["id"], g["category"], g["name"], f"{gc.total_weight_oz(g):.1f}",
+            table.add_row(g["id"], g["category"], g["name"], gc.format_weight_oz(gc.total_weight_oz(g)),
                          g["weight_type"], str(g["qty"]), f"{g['usefulness']}/5", flag, key=g["id"])
             count += 1
             visible_ids.add(g["id"])
@@ -1197,7 +1239,7 @@ class TripsPane(Vertical):
 
     def on_mount(self) -> None:
         table = self.query_one("#trip-table", DataTable)
-        table.add_columns("ID", "Name", "Dates", "Items", "Base (lb)", "Target (lb)", "vs Target")
+        table.add_columns("ID", "Name", "Dates", "Items", "Base weight", "Target", "vs Target")
         self.refresh_table()
 
     def refresh_table(self, filter_text: str = "") -> None:
@@ -1213,15 +1255,15 @@ class TripsPane(Vertical):
             if t and t not in blob:
                 continue
             s = gc.compute_trip_summary(app.data, trip)
-            target = f"{s['target_lb']:.1f}" if s["target_lb"] else "-"
+            target = gc.format_weight_oz(s["target_lb"] * 16) if s["target_lb"] else "-"
             if s["delta_lb"] is None:
                 delta = "-"
             elif s["delta_lb"] <= 0:
-                delta = f"{s['delta_lb']:+.2f} ok"
+                delta = f"{gc.format_weight_oz(s['delta_lb'] * 16, signed=True)} ok"
             else:
-                delta = f"{s['delta_lb']:+.2f} over"
+                delta = f"{gc.format_weight_oz(s['delta_lb'] * 16, signed=True)} over"
             table.add_row(trip["id"], trip["name"], trip.get("dates", ""), str(len(trip["items"])),
-                         f"{s['base_lb']:.2f}", target, delta, key=trip["id"])
+                         gc.format_weight_oz(s["base_oz"]), target, delta, key=trip["id"])
             count += 1
             visible_ids.add(trip["id"])
         if selected_id in visible_ids:
