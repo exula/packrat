@@ -127,8 +127,8 @@ three cloud providers and may incur separate provider charges.
 
 The reusable Pack Profile is portable with the library and is included in AI
 requests. Saved sessions contain the context snapshot, prompts, answers,
-citations, proposals, and usage metadata; delete files from the library's
-`insights/` folder if you do not want to retain them.
+citations, proposals, and usage metadata. Use the saved-session controls in
+Insights to load, export, or permanently delete a conversation.
 
 ## Data safety
 

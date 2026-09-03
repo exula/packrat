@@ -645,6 +645,22 @@ def list_sessions(directory):
     return sorted(sessions, key=lambda value: value.get("updated_at", ""), reverse=True)
 
 
+def delete_session(directory, session_id):
+    """Delete one Packrat-created session without accepting arbitrary paths."""
+    try:
+        normalized_id = str(uuid.UUID(str(session_id)))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise InsightError("Invalid insight session ID") from exc
+    path = Path(directory) / f"{normalized_id}.json"
+    try:
+        path.unlink()
+    except FileNotFoundError as exc:
+        raise InsightError("Insight session no longer exists") from exc
+    except OSError as exc:
+        raise InsightError(f"Could not delete insight session: {exc}") from exc
+    return str(path)
+
+
 def render_session_markdown(session):
     lines = [f"# Packrat Insight: {session.get('mode', 'Insight').replace('_', ' ').title()}", ""]
     lines.append(f"- Provider: {session.get('provider', '-')}")

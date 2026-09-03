@@ -13,7 +13,7 @@ import gear_core as gc
 import gear_insights as insights
 import packrat_preferences as preferences
 from gear_tui import (
-    GearTrackerApp, InsightsPane, InsightsProfileScreen, InsightsSettingsScreen,
+    ConfirmScreen, GearTrackerApp, InsightsPane, InsightsProfileScreen, InsightsSettingsScreen,
     ProposalReviewScreen,
 )
 from textual.containers import VerticalScroll
@@ -92,6 +92,12 @@ class InsightCoreTests(unittest.TestCase):
             markdown = insights.render_session_markdown(loaded)
             self.assertIn("The tent", markdown)
             self.assertIn("[Example](https://example.com)", markdown)
+            deleted = insights.delete_session(directory, session["id"])
+            self.assertFalse(Path(deleted).exists())
+            with self.assertRaisesRegex(insights.InsightError, "no longer exists"):
+                insights.delete_session(directory, session["id"])
+            with self.assertRaisesRegex(insights.InsightError, "Invalid"):
+                insights.delete_session(directory, "../outside")
 
 
 class PreferenceAndCredentialTests(unittest.TestCase):
@@ -244,6 +250,11 @@ class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(pane.query_one("#insights-run", Button).disabled)
                 self.assertTrue(pane.query_one("#insights-council", Button).disabled)
                 self.assertTrue(pane.query_one("#insights-cancel", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-load", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-delete", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-export", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-refresh", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-review", Button).disabled)
                 pane.query_one("#insights-scope", Select).value = "trip"
                 await pilot.pause()
                 self.assertTrue(pane.query_one("#insights-trip", Select).display)
@@ -319,11 +330,24 @@ class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
                     await pilot.pause()
                     self.assertIsInstance(app.screen, ProposalReviewScreen)
                     app.screen.query_one("#proposal-0", Checkbox).value = True
-                    app.screen.query_one("#proposal-apply").press()
+                    await pilot.press("ctrl+s")
                     await pilot.pause()
                     self.assertFalse(any(
                         item["gear_id"] == "G003" for item in app.data["trips"][0]["items"]
                     ))
+                    self.assertEqual(
+                        pane.query_one("#insights-sessions", Select).value,
+                        pane.current_session["id"],
+                    )
+                    delete_button = pane.query_one("#insights-delete", Button)
+                    self.assertFalse(delete_button.disabled)
+                    delete_button.press()
+                    await pilot.pause()
+                    self.assertIsInstance(app.screen, ConfirmScreen)
+                    await pilot.click("#c-confirm")
+                    await pilot.pause()
+                    self.assertFalse(list(Path(app.insights_dir).glob("*.json")))
+                    self.assertIsNone(pane.current_session)
 
 
 if __name__ == "__main__":

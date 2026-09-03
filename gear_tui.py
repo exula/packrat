@@ -340,6 +340,12 @@ def colored_bar(percent: float, width: int = 20) -> Text:
     return text
 
 
+def select_is_blank(value: object) -> bool:
+    """Handle empty Select values across supported Textual releases."""
+    null_value = getattr(Select, "NULL", Select.BLANK)
+    return value is None or value is null_value or value is Select.BLANK
+
+
 # ---------------------------------------------------------------------------
 # Modal dialogs
 # ---------------------------------------------------------------------------
@@ -808,7 +814,7 @@ class TripComparisonScreen(Screen):
 
     @on(Select.Changed, "#compare-trip")
     def _selection_changed(self, event: Select.Changed) -> None:
-        if event.value != Select.BLANK:
+        if not select_is_blank(event.value):
             self._refresh(str(event.value))
 
     def _refresh(self, right_trip_id: str) -> None:
@@ -1571,7 +1577,7 @@ class InsightsSettingsScreen(ModalScreen[bool]):
 
     def _collect(self):
         primary = self.query_one("#settings-primary", Select).value
-        if primary is Select.BLANK:
+        if select_is_blank(primary):
             raise ValueError("Choose a primary provider")
         value = {"primary_provider": str(primary), "providers": {}}
         for name in insights.PROVIDERS:
@@ -1623,7 +1629,7 @@ class InsightsSettingsScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#settings-remove-key")
     def _remove_key(self) -> None:
         primary = self.query_one("#settings-primary", Select).value
-        if primary is Select.BLANK:
+        if select_is_blank(primary):
             self.query_one("#settings-status", Static).update("Choose a primary provider")
             return
         insights.CredentialStore.delete(str(primary))
@@ -1645,7 +1651,10 @@ class InsightsSettingsScreen(ModalScreen[bool]):
 
 
 class ProposalReviewScreen(ModalScreen[Optional[List[dict]]]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "apply", "Apply checked"),
+    ]
 
     def __init__(self, proposals: List[dict]):
         super().__init__()
@@ -1666,6 +1675,9 @@ class ProposalReviewScreen(ModalScreen[Optional[List[dict]]]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_apply(self) -> None:
+        self._apply()
 
     @on(Button.Pressed, "#proposal-cancel")
     def _cancel(self) -> None:
@@ -1722,6 +1734,7 @@ class InsightsPane(Horizontal):
             with Horizontal(classes="toolbar"):
                 yield Button("Load", id="insights-load")
                 yield Button("Export", id="insights-export")
+                yield Button("Delete", id="insights-delete", variant="error")
             yield Static("Configure a provider to begin.", id="insights-status")
         with VerticalScroll(id="insights-result"):
             yield Markdown("# Packrat Insights\n\nChoose a guided mode and provider, then describe what you want to learn.")
@@ -1746,12 +1759,20 @@ class InsightsPane(Horizontal):
             provider_select.value = settings["primary_provider"]
         elif configured:
             provider_select.value = configured[0][1]
-        self._update_control_states()
         sessions = insights.list_sessions(app.insights_dir)
-        self.query_one("#insights-sessions", Select).set_options([
+        session_select = self.query_one("#insights-sessions", Select)
+        previous_session = session_select.value
+        session_select.set_options([
             (f"{item['mode'].replace('_', ' ').title()} · {item['updated_at']}", item["id"])
             for item in sessions
         ])
+        session_ids = {item["id"] for item in sessions}
+        current_id = self.current_session.get("id") if self.current_session else None
+        if current_id in session_ids:
+            session_select.value = current_id
+        elif previous_session in session_ids:
+            session_select.value = previous_session
+        self._update_control_states()
         if configured:
             status = f"{len(configured)} provider(s) ready · sessions: {app.insights_dir}"
         else:
@@ -1770,13 +1791,29 @@ class InsightsPane(Horizontal):
         provider = self.query_one("#insights-provider", Select).value
         mode = self.query_one("#insights-mode", Select).value
         local_research = provider == "local" and mode == "gear_research"
+        for selector in ("#insights-mode", "#insights-scope", "#insights-trip", "#insights-provider"):
+            self.query_one(selector, Select).disabled = running
+        self.query_one("#insights-goal", TextArea).disabled = running
+        self.query_one("#insights-settings", Button).disabled = running
+        self.query_one("#insights-profile", Button).disabled = running
+        self.query_one("#insights-new", Button).disabled = running
         self.query_one("#insights-run", Button).disabled = (
             running or provider_count == 0 or local_research
         )
         self.query_one("#insights-council", Button).disabled = running or provider_count < 2
         self.query_one("#insights-cancel", Button).disabled = not running
+        selected_session = self.query_one("#insights-sessions", Select).value
+        has_saved_selection = not select_is_blank(selected_session)
+        self.query_one("#insights-sessions", Select).disabled = running
+        self.query_one("#insights-load", Button).disabled = running or not has_saved_selection
+        self.query_one("#insights-delete", Button).disabled = running or not has_saved_selection
+        self.query_one("#insights-export", Button).disabled = running or self.current_session is None
+        self.query_one("#insights-refresh", Button).disabled = running or self.current_session is None
+        self.query_one("#insights-review", Button).disabled = running or not bool(
+            self.current_result and self.current_result.get("proposals")
+        )
         research = self.query_one("#insights-research", Checkbox)
-        research.disabled = provider is Select.BLANK or provider == "local"
+        research.disabled = running or select_is_blank(provider) or provider == "local"
         if research.disabled:
             research.value = False
         elif mode == "gear_research":
@@ -1803,6 +1840,10 @@ class InsightsPane(Horizontal):
         if event.value == "local" and was_researching:
             self.app.notify("Local models use library context only", severity="information")
 
+    @on(Select.Changed, "#insights-sessions")
+    def _session_changed(self) -> None:
+        self._update_control_states()
+
     def _run_inputs(self, allow_local_research: bool = False):
         mode = self.query_one("#insights-mode", Select).value
         scope = self.query_one("#insights-scope", Select).value
@@ -1810,14 +1851,17 @@ class InsightsPane(Horizontal):
         trip_id = self.query_one("#insights-trip", Select).value
         research = self.query_one("#insights-research", Checkbox).value
         goal = self.query_one("#insights-goal", TextArea).text.strip()
-        if mode is Select.BLANK or scope is Select.BLANK or provider is Select.BLANK:
+        if any(select_is_blank(value) for value in (mode, scope, provider)):
             raise insights.InsightError("Choose a mode, scope, and configured provider")
         research = bool(research or mode == "gear_research")
-        if scope == "trip" and trip_id is Select.BLANK:
+        if scope == "trip" and select_is_blank(trip_id):
             raise insights.InsightError("Choose a trip for trip-scoped analysis")
         if research and provider == "local" and not allow_local_research:
             raise insights.InsightError("The local provider does not support web research")
-        return str(mode), str(scope), str(provider), None if trip_id is Select.BLANK else str(trip_id), research, goal
+        return (
+            str(mode), str(scope), str(provider),
+            None if select_is_blank(trip_id) else str(trip_id), research, goal,
+        )
 
     @on(Button.Pressed, "#insights-run")
     def _run_pressed(self) -> None:
@@ -1980,6 +2024,7 @@ class InsightsPane(Horizontal):
         self.query_one("#insights-result", VerticalScroll).query_one(Markdown).update(
             "# New insight session\n\nChoose context and ask a question."
         )
+        self._update_control_states()
 
     @on(Button.Pressed, "#insights-refresh")
     def _refresh_context(self) -> None:
@@ -2097,7 +2142,7 @@ class InsightsPane(Horizontal):
     @on(Button.Pressed, "#insights-load")
     def _load_session(self) -> None:
         selected = self.query_one("#insights-sessions", Select).value
-        if selected is Select.BLANK:
+        if select_is_blank(selected):
             self.app.notify("Choose a saved session", severity="warning")
             return
         app: "GearTrackerApp" = self.app  # type: ignore
@@ -2118,6 +2163,37 @@ class InsightsPane(Horizontal):
         app: "GearTrackerApp" = self.app  # type: ignore
         filename = f"insight_{self.current_session['id'][:8]}_{date.today().isoformat()}.md"
         app.write_export(filename, insights.render_session_markdown(self.current_session))
+
+    @on(Button.Pressed, "#insights-delete")
+    def _delete_session(self) -> None:
+        selected = self.query_one("#insights-sessions", Select).value
+        if select_is_blank(selected):
+            return
+
+        def handled(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            app: "GearTrackerApp" = self.app  # type: ignore
+            try:
+                insights.delete_session(app.insights_dir, str(selected))
+            except insights.InsightError as exc:
+                self.app.notify(str(exc), severity="error")
+                self.refresh_options()
+                return
+            if self.current_session and self.current_session.get("id") == selected:
+                self.current_session = None
+                self.current_result = None
+                result = self.query_one("#insights-result", VerticalScroll)
+                result.query_one(Markdown).update(
+                    "# Packrat Insights\n\nSession deleted. Start a new question or load another session."
+                )
+            self.refresh_options()
+            self.query_one("#insights-status", Static).update("Saved session deleted")
+
+        self.app.push_screen(
+            ConfirmScreen("Delete this saved insight session? This cannot be undone.", danger=True),
+            handled,
+        )
 
 
 # ---------------------------------------------------------------------------
