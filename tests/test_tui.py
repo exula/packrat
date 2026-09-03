@@ -227,11 +227,19 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(app.screen.query_one("#dash-edit-item", Button).disabled)
                 self.assertTrue(app.screen.query_one("#dash-remove-item", Button).disabled)
                 self.assertFalse(app.screen.query_one("#dash-add-item", Button).disabled)
+                self.assertIn(
+                    "No gear assigned yet",
+                    str(app.screen.query_one("#dash-items-heading", Static).render()),
+                )
                 await pilot.press("escape")
 
                 app.data["trips"].clear()
                 await pilot.press("3")
                 self.assertTrue(app.query_one("#report-export-trip", Button).disabled)
+                self.assertIn(
+                    "full inventory export is still available",
+                    str(app.query_one("#report-status", Static).render()),
+                )
 
 
 class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
@@ -330,7 +338,7 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
             destination = Path(directory) / "blank-library"
             app = GearTrackerApp(str(original), preferences_path=str(preference_path))
 
-            async with app.run_test(size=(120, 40)):
+            async with app.run_test(size=(120, 40)) as pilot:
                 app._change_library(("open", str(destination), False))
 
                 self.assertEqual(app.data["gear"], [])
@@ -338,6 +346,21 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     gc.load_data(destination / preferences.DATA_FILENAME)["gear"],
                     [],
+                )
+
+                self.assertIn(
+                    "No gear yet",
+                    str(app.query_one("#gear-status", Static).render()),
+                )
+                await pilot.press("2")
+                self.assertIn(
+                    "No trips yet",
+                    str(app.query_one("#trip-status", Static).render()),
+                )
+                await pilot.press("3")
+                self.assertIn(
+                    "full inventory export is still available",
+                    str(app.query_one("#report-status", Static).render()),
                 )
 
     async def test_copy_switch_preserves_source_and_refuses_overwrite(self):

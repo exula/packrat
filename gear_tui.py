@@ -928,8 +928,11 @@ class TripDashboardScreen(Screen):
             yield Static(id="dash-summary", classes="panel")
             yield Static("Category Breakdown", classes="section-title")
             yield DataTable(id="dash-cat-table", zebra_stripes=True, cursor_type="none")
-            yield Static("Assigned Gear — select a row, then Remove to take it off this trip",
-                         classes="section-title")
+            yield Static(
+                "Assigned Gear — select a row, then Remove to take it off this trip",
+                id="dash-items-heading",
+                classes="section-title",
+            )
             yield DataTable(id="dash-items-table", cursor_type="row", zebra_stripes=True)
             with Horizontal(classes="toolbar"):
                 yield Button("+ Add Item", id="dash-add-item", variant="success")
@@ -1006,6 +1009,15 @@ class TripDashboardScreen(Screen):
         has_items = items_table.row_count > 0
         assigned_ids = {item["gear_id"] for item in trip["items"]}
         has_available_gear = any(gear["id"] not in assigned_ids for gear in app.data["gear"])
+        if not app.data["gear"]:
+            items_heading = "No inventory gear yet — go back to Gear and add an item first"
+        elif not has_items:
+            items_heading = "No gear assigned yet — choose + Add Item or press A"
+        elif not has_available_gear:
+            items_heading = "Assigned Gear — every inventory item is already on this trip"
+        else:
+            items_heading = "Assigned Gear — select a row to edit or remove it"
+        self.query_one("#dash-items-heading", Static).update(items_heading)
         self.query_one("#dash-add-item", Button).disabled = not has_available_gear
         self.query_one("#dash-edit-item", Button).disabled = not has_items
         self.query_one("#dash-remove-item", Button).disabled = not has_items
@@ -1201,6 +1213,8 @@ class GearPane(Vertical):
             label = "No review candidates · select Review Candidates to show all gear"
         elif not has_rows and t:
             label = "No matching gear · press Esc to clear the search"
+        elif not has_rows:
+            label = "No gear yet · choose + Add Item or press A"
         else:
             label = f"{count} item(s)" + (" · review filter on" if review_only else "")
         self.query_one("#gear-status", Static).update(label)
@@ -1408,10 +1422,12 @@ class TripsPane(Vertical):
         self.query_one("#trip-duplicate", Button).disabled = not has_rows
         self.query_one("#trip-delete", Button).disabled = not has_rows
         self.query_one("#trip-compare", Button).disabled = not has_rows or len(app.data["trips"]) < 2
-        status = (
-            "No matching trips · press Esc to clear the search"
-            if not has_rows and t else f"{count} trip(s)"
-        )
+        if not has_rows and t:
+            status = "No matching trips · press Esc to clear the search"
+        elif not has_rows:
+            status = "No trips yet · choose + Add Trip or press A"
+        else:
+            status = f"{count} trip(s)"
         self.query_one("#trip-status", Static).update(status)
 
     @on(Input.Changed, "#trip-search")
@@ -2295,8 +2311,6 @@ class ReportsPane(Vertical):
     def on_mount(self) -> None:
         self.query_one("#report-trip-table", DataTable).add_columns("ID", "Name", "Dates", "Items")
         self.refresh_table()
-        app: "GearTrackerApp" = self.app  # type: ignore
-        self.query_one("#report-status", Static).update(f"Exports are written to: {app.export_dir}")
 
     def refresh_table(self) -> None:
         app: "GearTrackerApp" = self.app  # type: ignore
@@ -2305,6 +2319,13 @@ class ReportsPane(Vertical):
         for trip in app.data["trips"]:
             table.add_row(trip["id"], trip["name"], trip.get("dates", ""), str(len(trip["items"])), key=trip["id"])
         self.query_one("#report-export-trip", Button).disabled = table.row_count == 0
+        prefix = (
+            "No trips yet · full inventory export is still available. "
+            if table.row_count == 0 else ""
+        )
+        self.query_one("#report-status", Static).update(
+            f"{prefix}Exports are written to: {app.export_dir}"
+        )
 
     @on(Button.Pressed, "#report-export-trip")
     def _export_trip(self) -> None:
