@@ -23,7 +23,8 @@ uv run python main.py
 
 The first launch opens a short setup screen. Accept the suggested
 platform-specific folder or enter another folder; Packrat creates
-`gear_data.json` there with clearly labeled example items.
+`gear_data.json` there. It includes clearly labeled example items by default
+for a quick tour, or you can uncheck that option to start with a blank library.
 
 Without `uv`:
 
@@ -152,9 +153,11 @@ the last valid in-memory library and explains the problem instead of replacing i
 
 The setup screen and Storage Preferences select a folder; the library inside
 that folder is always named `gear_data.json`. **Open / Create** opens an
-existing valid library or creates a new example library. **Copy Current &
-Switch** copies the active library to an unused destination and leaves the
-original file intact. It will not overwrite an existing destination library.
+existing valid library or creates a new one; choose whether a newly created
+library should include examples. The choice never changes an existing library.
+**Copy Current & Switch** copies the active library to an unused destination
+and leaves the original file intact. It will not overwrite an existing
+destination library.
 
 If the saved preference is damaged or its library cannot be opened, Packrat
 returns to setup with the error instead of silently using another data file.

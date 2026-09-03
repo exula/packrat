@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from textual.widgets import Button, Input, Label, Static, TabbedContent
+from textual.widgets import Button, Checkbox, Input, Label, Static, TabbedContent
 
 from gear_tui import (
     ConfirmScreen,
@@ -266,6 +266,20 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(storage.exists())
             self.assertFalse(preference_path.exists())
 
+    async def test_first_run_can_create_blank_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Path(directory) / "blank-library"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            app = SetupApp(preferences_path=str(preference_path))
+            async with app.run_test(size=(100, 30)) as pilot:
+                app.query_one("#setup-folder", Input).value = str(storage)
+                app.query_one("#setup-examples", Checkbox).value = False
+                await pilot.press("enter")
+
+            data = gc.load_data(storage / preferences.DATA_FILENAME)
+            self.assertEqual(data["gear"], [])
+            self.assertEqual(data["trips"], [])
+
     async def test_open_create_switches_library_and_updates_derived_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             original = Path(directory) / "original" / "gear.json"
@@ -307,6 +321,23 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     app.data_path,
                     preferences.data_path_for_directory(destination),
+                )
+
+    async def test_open_create_can_start_with_blank_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original" / "gear.json"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            destination = Path(directory) / "blank-library"
+            app = GearTrackerApp(str(original), preferences_path=str(preference_path))
+
+            async with app.run_test(size=(120, 40)):
+                app._change_library(("open", str(destination), False))
+
+                self.assertEqual(app.data["gear"], [])
+                self.assertEqual(app.data["trips"], [])
+                self.assertEqual(
+                    gc.load_data(destination / preferences.DATA_FILENAME)["gear"],
+                    [],
                 )
 
     async def test_copy_switch_preserves_source_and_refuses_overwrite(self):

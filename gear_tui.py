@@ -18,7 +18,7 @@ import os
 import tempfile
 import threading
 from datetime import date
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from rich.text import Text
 from textual import on, work
@@ -2336,7 +2336,9 @@ class ReportsPane(Vertical):
 # ---------------------------------------------------------------------------
 
 
-def _prepare_library(directory: str) -> Tuple[str, dict, bool]:
+def _prepare_library(
+    directory: str, include_examples: bool = True
+) -> Tuple[str, dict, bool]:
     """Validate a folder and load or create its Packrat library."""
     normalized_directory = preferences.normalize_path(directory)
     if os.path.exists(normalized_directory) and not os.path.isdir(normalized_directory):
@@ -2350,7 +2352,7 @@ def _prepare_library(directory: str) -> Tuple[str, dict, bool]:
     data_path = preferences.data_path_for_directory(normalized_directory)
     created = not os.path.exists(data_path)
     if created:
-        data = gc.example_data()
+        data = gc.example_data() if include_examples else gc.blank_data()
         gc.save_data(data_path, data)
     else:
         data = gc.load_data(data_path)
@@ -2374,10 +2376,15 @@ class SetupApp(App):
             yield Static("🎒 Welcome to Packrat", classes="dialog-title")
             yield Static(
                 "Choose where Packrat should keep your gear library. "
-                "New libraries start with clearly labeled example gear."
+                "Start with examples for a quick tour, or uncheck the option for a blank library."
             )
             yield Label("Gear storage folder")
             yield Input(value=str(preferences.suggested_data_directory()), id="setup-folder")
+            yield Checkbox(
+                "Include example gear and trip",
+                value=True,
+                id="setup-examples",
+            )
             yield Static(self.initial_error, id="setup-error")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Quit", id="setup-quit")
@@ -2399,8 +2406,11 @@ class SetupApp(App):
     @on(Button.Pressed, "#setup-use")
     def _use_folder(self) -> None:
         directory = self.query_one("#setup-folder", Input).value
+        include_examples = self.query_one("#setup-examples", Checkbox).value
         try:
-            data_path, _data, created = _prepare_library(directory)
+            data_path, _data, created = _prepare_library(
+                directory, include_examples=include_examples
+            )
             try:
                 preferences.save_preferences(
                     os.path.dirname(data_path), path=self.preferences_path
@@ -2422,26 +2432,41 @@ class SetupApp(App):
         self.exit(None)
 
 
-class PreferencesScreen(ModalScreen[Optional[Tuple[str, str]]]):
+LibraryPreferenceResult = Union[Tuple[str, str], Tuple[str, str, bool]]
+
+
+class PreferencesScreen(ModalScreen[Optional[LibraryPreferenceResult]]):
     """Choose whether to open another library or copy the current one."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
     AUTO_FOCUS = "#preferences-folder"
 
-    def __init__(self, current_directory: str, initial_error: str = ""):
+    def __init__(
+        self,
+        current_directory: str,
+        initial_error: str = "",
+        include_examples: bool = True,
+    ):
         super().__init__()
         self.current_directory = current_directory
         self.initial_error = initial_error
+        self.include_examples = include_examples
 
     def compose(self) -> ComposeResult:
         with Vertical(id="preferences-dialog"):
             yield Static("⚙ Storage Preferences", classes="dialog-title")
             yield Static(
                 "Open a library in another folder, or copy the current library there. "
-                "Packrat never overwrites an existing destination when copying."
+                "The examples option only affects a newly created library; existing and "
+                "copied libraries are unchanged."
             )
             yield Label("Gear storage folder")
             yield Input(value=self.current_directory, id="preferences-folder")
+            yield Checkbox(
+                "Include examples if creating a new library",
+                value=self.include_examples,
+                id="preferences-examples",
+            )
             yield Static(self.initial_error, id="preferences-error")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="preferences-cancel")
@@ -2470,11 +2495,23 @@ class PreferencesScreen(ModalScreen[Optional[Tuple[str, str]]]):
 
     @on(Button.Pressed, "#preferences-open")
     def _open(self) -> None:
-        self.dismiss(("open", self.query_one("#preferences-folder", Input).value))
+        self.dismiss(
+            (
+                "open",
+                self.query_one("#preferences-folder", Input).value,
+                self.query_one("#preferences-examples", Checkbox).value,
+            )
+        )
 
     @on(Button.Pressed, "#preferences-copy")
     def _copy(self) -> None:
-        self.dismiss(("copy", self.query_one("#preferences-folder", Input).value))
+        self.dismiss(
+            (
+                "copy",
+                self.query_one("#preferences-folder", Input).value,
+                self.query_one("#preferences-examples", Checkbox).value,
+            )
+        )
 
 
 class GearTrackerApp(App):
@@ -2545,10 +2582,11 @@ class GearTrackerApp(App):
             self._change_library,
         )
 
-    def _change_library(self, result: Optional[Tuple[str, str]]) -> None:
+    def _change_library(self, result: Optional[LibraryPreferenceResult]) -> None:
         if result is None:
             return
-        operation, directory = result
+        operation, directory = result[:2]
+        include_examples = result[2] if len(result) == 3 else True
         created_path: Optional[str] = None
         try:
             normalized_directory = preferences.normalize_path(directory)
@@ -2565,7 +2603,9 @@ class GearTrackerApp(App):
                 created_path = destination_path
                 new_data = gc.load_data(destination_path)
             elif operation == "open":
-                destination_path, new_data, created = _prepare_library(normalized_directory)
+                destination_path, new_data, created = _prepare_library(
+                    normalized_directory, include_examples=include_examples
+                )
                 if created:
                     created_path = destination_path
             else:
@@ -2581,7 +2621,11 @@ class GearTrackerApp(App):
                 except OSError:
                     pass
             self.push_screen(
-                PreferencesScreen(directory, initial_error=f"Library switch failed: {exc}"),
+                PreferencesScreen(
+                    directory,
+                    initial_error=f"Library switch failed: {exc}",
+                    include_examples=include_examples,
+                ),
                 self._change_library,
             )
             return
