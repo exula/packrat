@@ -33,8 +33,17 @@ BIG_THREE = {"Shelter", "Sleep System", "Pack"}
 REVIEW_WEIGHT_THRESHOLD_OZ = 8.0
 REVIEW_USEFULNESS_THRESHOLD = 3
 AUDIT_STATUSES = ("covered", "omitted", "unresolved")
-DATA_VERSION = 2
+DATA_VERSION = 3
 GRAMS_PER_OUNCE = 28.349523125
+
+INSIGHTS_PROFILE_DEFAULTS = {
+    "experience_level": "",
+    "priorities": "",
+    "typical_conditions": "",
+    "budget_notes": "",
+    "constraints": "",
+    "additional_context": "",
+}
 
 class DataValidationError(ValueError):
     """Raised when a data file doesn't match Packrat's expected schema."""
@@ -51,6 +60,7 @@ class DataConflictError(OSError):
 def blank_data():
     return {
         "meta": {"created": date.today().isoformat(), "version": DATA_VERSION},
+        "insights_profile": copy.deepcopy(INSIGHTS_PROFILE_DEFAULTS),
         "gear": [],
         "trips": [],
     }
@@ -136,6 +146,14 @@ def validate_data(data):
     for collection in ("gear", "trips"):
         if not isinstance(data.setdefault(collection, []), list):
             raise DataValidationError(f"{collection} must be a list")
+
+    profile = data.setdefault("insights_profile", copy.deepcopy(INSIGHTS_PROFILE_DEFAULTS))
+    if not isinstance(profile, dict):
+        raise DataValidationError("insights_profile must be an object")
+    for field, default in INSIGHTS_PROFILE_DEFAULTS.items():
+        profile.setdefault(field, default)
+        if not isinstance(profile[field], str):
+            raise DataValidationError(f"insights_profile.{field} must be a string")
 
     gear_ids = set()
     for index, gear in enumerate(data["gear"]):

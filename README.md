@@ -58,7 +58,7 @@ Everything is click-driven, with keyboard equivalents for everything. Press
 `?` in the app for the complete shortcut overlay. The most useful shortcuts
 are:
 
-- **1 / 2 / 3** switches between Gear, Trips, and Reports.
+- **1 / 2 / 3 / 4** switches between Gear, Trips, Reports, and Insights.
 - **/** focuses the search box; **Esc** clears search and returns to the table.
 - **A** adds, **E** edits, **Delete** deletes/removes, and **R** toggles review
   candidates when the relevant table is focused.
@@ -98,7 +98,37 @@ are:
   to a polished Markdown file (weight summary, category breakdown with a
   bar chart, heaviest items, review candidates, and a checkbox pack list)
   written to `exports/`.
+- **Insights tab** — use ChatGPT/OpenAI, Claude, Gemini, or an
+  OpenAI-compatible local server for a Shakedown, Trip Coach, Swap Lab,
+  cited Gear Research, or an open-ended question. Packrat sends a previewable
+  snapshot of the selected inventory or trip, saves conversations in the
+  library's `insights/` folder, and treats model changes as drafts that must be
+  checked before they are validated and saved locally. Council mode compares
+  every configured provider and asks the primary provider to reconcile them.
 - **Esc** cancels any dialog. **q** quits from the main screen.
+
+## AI provider setup
+
+Open **Insights → Providers** and enable one or more providers. Enter a model
+ID and optionally an API key. Keys entered in Packrat are stored in the
+operating system keychain, never in `preferences.json`, `gear_data.json`, or
+saved insight sessions. Environment variables take precedence:
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+- `PACKRAT_LOCAL_API_KEY` (optional)
+
+Provider URLs may be overridden in the dialog or with `OPENAI_BASE_URL`,
+`ANTHROPIC_BASE_URL`, `GEMINI_BASE_URL`, and `PACKRAT_LOCAL_BASE_URL`. The local
+provider uses the OpenAI-compatible Chat Completions protocol and defaults to
+Ollama at `http://localhost:11434/v1`. Web research is available only for the
+three cloud providers and may incur separate provider charges.
+
+The reusable Pack Profile is portable with the library and is included in AI
+requests. Saved sessions contain the context snapshot, prompts, answers,
+citations, proposals, and usage metadata; delete files from the library's
+`insights/` folder if you do not want to retain them.
 
 ## Data safety
 
@@ -139,7 +169,8 @@ uv run python -m unittest discover -s tests -v
 ```
 
 The suite covers JSON migration and validation, persistence, trip-specific
-weight calculations, duplication, comparisons, pack-audit logic, Markdown
-exports, and headless keyboard workflows.
+weight calculations, duplication, comparisons, pack-audit logic, AI provider
+normalization and proposal safety, Markdown exports, and headless keyboard
+workflows.
 
 The same suite runs on Python 3.9 and 3.12 for every pull request.

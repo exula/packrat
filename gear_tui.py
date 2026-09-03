@@ -12,14 +12,16 @@ Requires: pip install textual platformdirs (see requirements.txt)
 
 import argparse
 import copy
+import json
 import math
 import os
 import tempfile
+import threading
 from datetime import date
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from rich.text import Text
-from textual import on
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -27,18 +29,22 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
     Input,
     Label,
+    Markdown,
     Select,
     Static,
     TabbedContent,
     TabPane,
+    TextArea,
 )
 
 import gear_core as gc
+import gear_insights as insights
 import packrat_preferences as preferences
 
 # ---------------------------------------------------------------------------
@@ -169,6 +175,64 @@ ModalScreen {
     width: 90%;
     max-width: 76;
     height: auto;
+}
+
+#insights-settings-dialog, #insights-profile-dialog, #proposal-dialog {
+    background: #182015;
+    border: thick #4A7856;
+    padding: 1 2;
+    width: 95%;
+    max-width: 92;
+    height: 90%;
+    overflow-y: auto;
+}
+
+#insights-layout {
+    height: 1fr;
+}
+
+#insights-controls {
+    width: 38;
+    padding: 1;
+    border-right: solid #3A4A32;
+}
+
+#insights-controls Select, #insights-controls Input, #insights-controls TextArea {
+    width: 100%;
+    margin-bottom: 1;
+}
+
+#insights-goal {
+    height: 8;
+}
+
+#insights-result {
+    height: 1fr;
+    padding: 1 2;
+}
+
+.provider-row {
+    height: auto;
+    padding-bottom: 1;
+}
+
+.provider-row Checkbox {
+    width: 14;
+}
+
+.provider-row Input {
+    width: 1fr;
+    margin-left: 1;
+}
+
+.profile-field {
+    height: 4;
+    margin-bottom: 1;
+}
+
+#insights-status, #settings-status {
+    color: #C7D7BC;
+    padding: 1;
 }
 
 .picker-dialog {
@@ -786,13 +850,14 @@ class ShortcutHelpScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         help_text = """[b]Keyboard shortcuts[/b]
 
-[b]Anywhere[/b]       1 / 2 / 3  Switch tabs     /  Search     ?  This help
+[b]Anywhere[/b]       1 / 2 / 3 / 4  Switch tabs  /  Search     ?  This help
                  Ctrl+B  Backup data   Ctrl+P  Preferences   Q  Quit
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
 [b]Trips[/b]          A  Add      Enter  Open  D  Duplicate  C  Compare  Delete  Delete
 [b]Trip dashboard[/b] A  Add item I  Edit qty/note E  Edit trip P  Pack audit
                  Delete  Remove     X  Export
+[b]Insights[/b]       Run one provider or Council; review every proposed change
 [b]Dialogs[/b]        Ctrl+S  Save/add          Esc  Cancel
 [b]Confirmations[/b]  Enter  Confirm            Esc  Cancel
 
@@ -1382,6 +1447,603 @@ class TripsPane(Vertical):
 
 
 # ---------------------------------------------------------------------------
+# AI insights
+# ---------------------------------------------------------------------------
+
+
+class InsightsProfileScreen(ModalScreen[Optional[dict]]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
+
+    def __init__(self, profile: dict):
+        super().__init__()
+        self.profile = copy.deepcopy(profile)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="insights-profile-dialog"):
+            yield Label("Pack profile", classes="dialog-title")
+            yield Static("This context is stored with the portable library and included in AI requests.")
+            fields = [
+                ("Experience level", "experience_level"),
+                ("Priorities (weight, comfort, cost, durability, simplicity)", "priorities"),
+                ("Typical conditions", "typical_conditions"),
+                ("Budget notes", "budget_notes"),
+                ("Constraints", "constraints"),
+                ("Additional context", "additional_context"),
+            ]
+            for label, field in fields:
+                yield Label(label)
+                yield TextArea(self.profile.get(field, ""), id=f"profile-{field}", classes="profile-field")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="profile-cancel")
+                yield Button("Save Profile", id="profile-save", variant="success")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_save(self) -> None:
+        result = {
+            field: self.query_one(f"#profile-{field}", TextArea).text.strip()
+            for field in gc.INSIGHTS_PROFILE_DEFAULTS
+        }
+        self.dismiss(result)
+
+    @on(Button.Pressed, "#profile-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#profile-save")
+    def _save(self) -> None:
+        self.action_save()
+
+
+class InsightsSettingsScreen(ModalScreen[bool]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
+
+    def __init__(self, settings: dict, preferences_path: Optional[str]):
+        super().__init__()
+        self.settings = copy.deepcopy(settings)
+        self.preferences_path = preferences_path
+
+    def compose(self) -> ComposeResult:
+        providers = self.settings["providers"]
+        with Vertical(id="insights-settings-dialog"):
+            yield Label("AI providers", classes="dialog-title")
+            yield Static(
+                "API keys use environment variables first, then the OS keychain. Keys are never written "
+                "to Packrat files. A custom cloud URL receives that provider's credential."
+            )
+            yield Label("Primary provider")
+            yield Select(
+                [(name.title(), name) for name in insights.PROVIDERS],
+                value=self.settings["primary_provider"], id="settings-primary",
+            )
+            for name in insights.PROVIDERS:
+                config = providers[name]
+                _, source = insights.CredentialStore.get(name)
+                with Horizontal(classes="provider-row"):
+                    yield Checkbox(name.title(), value=config["enabled"], id=f"settings-{name}-enabled")
+                    yield Input(value=config["model"], placeholder="Model ID", id=f"settings-{name}-model")
+                with Horizontal(classes="provider-row"):
+                    yield Input(value=config["base_url"], placeholder="Base URL", id=f"settings-{name}-url")
+                    yield Input(
+                        placeholder=f"API key ({source}; leave blank to keep)", password=True,
+                        id=f"settings-{name}-key",
+                    )
+            yield Static("", id="settings-status")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="settings-cancel")
+                yield Button("Remove Primary Key", id="settings-remove-key")
+                yield Button("Test Primary & Save", id="settings-test")
+                yield Button("Save", id="settings-save", variant="success")
+
+    def _collect(self):
+        primary = self.query_one("#settings-primary", Select).value
+        if primary is Select.BLANK:
+            raise ValueError("Choose a primary provider")
+        value = {"primary_provider": str(primary), "providers": {}}
+        for name in insights.PROVIDERS:
+            model = self.query_one(f"#settings-{name}-model", Input).value.strip()
+            base_url = self.query_one(f"#settings-{name}-url", Input).value.strip().rstrip("/")
+            enabled = self.query_one(f"#settings-{name}-enabled", Checkbox).value
+            if enabled and (not model or not base_url):
+                raise ValueError(f"{name.title()} needs a model and base URL")
+            value["providers"][name] = {"enabled": enabled, "model": model, "base_url": base_url}
+        return value
+
+    def _persist(self):
+        value = self._collect()
+        for name in insights.PROVIDERS:
+            key = self.query_one(f"#settings-{name}-key", Input).value.strip()
+            if key:
+                insights.CredentialStore.set(name, key)
+        self.settings = preferences.save_insights_settings(value, self.preferences_path)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_save(self) -> None:
+        try:
+            self._persist()
+        except (OSError, ValueError, preferences.PreferencesError, insights.InsightError) as exc:
+            self.query_one("#settings-status", Static).update(str(exc))
+            return
+        self.dismiss(True)
+
+    @on(Button.Pressed, "#settings-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#settings-save")
+    def _save(self) -> None:
+        self.action_save()
+
+    @on(Button.Pressed, "#settings-test")
+    def _test(self) -> None:
+        try:
+            self._persist()
+        except (OSError, ValueError, preferences.PreferencesError, insights.InsightError) as exc:
+            self.query_one("#settings-status", Static).update(str(exc))
+            return
+        self.query_one("#settings-status", Static).update("Testing connection…")
+        self._test_primary()
+
+    @on(Button.Pressed, "#settings-remove-key")
+    def _remove_key(self) -> None:
+        primary = self.query_one("#settings-primary", Select).value
+        if primary is Select.BLANK:
+            self.query_one("#settings-status", Static).update("Choose a primary provider")
+            return
+        insights.CredentialStore.delete(str(primary))
+        _, source = insights.CredentialStore.get(str(primary))
+        message = "Stored key removed."
+        if source == "environment":
+            message += " The environment variable is still active."
+        self.query_one("#settings-status", Static).update(message)
+
+    @work(thread=True, exclusive=True, group="provider-test")
+    def _test_primary(self) -> None:
+        provider = self.settings["primary_provider"]
+        try:
+            models = insights.ProviderClient().list_models(provider, self.settings["providers"][provider])
+            message = f"Connected. Provider returned {len(models)} model(s)."
+        except insights.InsightError as exc:
+            message = str(exc)
+        self.app.call_from_thread(self.query_one("#settings-status", Static).update, message)
+
+
+class ProposalReviewScreen(ModalScreen[Optional[List[dict]]]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, proposals: List[dict]):
+        super().__init__()
+        self.proposals = proposals
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="proposal-dialog"):
+            yield Label("Review proposed changes", classes="dialog-title")
+            yield Static("Only checked changes will be applied. Packrat validates and recalculates everything locally.")
+            for index, proposal in enumerate(self.proposals):
+                reason = proposal.get("reason", "No reason supplied")
+                summary = f"{proposal.get('type', 'change')} · {proposal.get('gear_id', 'new gear')} — {reason}"
+                yield Checkbox(summary, value=False, id=f"proposal-{index}")
+                yield Static(json.dumps(proposal, indent=2, ensure_ascii=False), classes="panel")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="proposal-cancel")
+                yield Button("Apply Checked", id="proposal-apply", variant="success")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#proposal-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#proposal-apply")
+    def _apply(self) -> None:
+        selected = [
+            proposal for index, proposal in enumerate(self.proposals)
+            if self.query_one(f"#proposal-{index}", Checkbox).value
+        ]
+        if not selected:
+            self.app.notify("Check at least one proposal", severity="warning")
+            return
+        self.dismiss(selected)
+
+
+class InsightsPane(Horizontal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.current_session = None
+        self.current_result = None
+        self._cancel_event = threading.Event()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="insights-controls"):
+            yield Label("Guided mode")
+            yield Select([
+                ("Shakedown", "shakedown"), ("Trip Coach", "trip_coach"),
+                ("Swap Lab", "swap_lab"), ("Gear Research", "gear_research"),
+                ("Ask Anything", "ask"),
+            ], value="shakedown", id="insights-mode")
+            yield Label("Scope")
+            yield Select([("Full inventory", "inventory"), ("Selected trip", "trip")], value="inventory", id="insights-scope")
+            yield Select([], prompt="Choose trip", id="insights-trip")
+            yield Label("Provider")
+            yield Select([], prompt="Configure a provider", id="insights-provider")
+            yield Checkbox("Research the web", id="insights-research")
+            yield Label("Goal or question")
+            yield TextArea("", id="insights-goal")
+            with Horizontal(classes="toolbar"):
+                yield Button("Run", id="insights-run", variant="success")
+                yield Button("Council", id="insights-council")
+                yield Button("Cancel", id="insights-cancel")
+            with Horizontal(classes="toolbar"):
+                yield Button("New Session", id="insights-new")
+                yield Button("Refresh Context", id="insights-refresh")
+            with Horizontal(classes="toolbar"):
+                yield Button("Review Changes", id="insights-review")
+            with Horizontal(classes="toolbar"):
+                yield Button("Providers", id="insights-settings")
+                yield Button("Pack Profile", id="insights-profile")
+            yield Select([], prompt="Saved sessions", id="insights-sessions")
+            with Horizontal(classes="toolbar"):
+                yield Button("Load", id="insights-load")
+                yield Button("Export", id="insights-export")
+            yield Static("Configure a provider to begin.", id="insights-status")
+        with VerticalScroll(id="insights-result"):
+            yield Markdown("# Packrat Insights\n\nChoose a guided mode and provider, then describe what you want to learn.")
+
+    def on_mount(self) -> None:
+        self.refresh_options()
+
+    def refresh_options(self) -> None:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        trip_select = self.query_one("#insights-trip", Select)
+        trip_select.set_options([(trip["name"], trip["id"]) for trip in app.data["trips"]])
+        settings = app.insights_settings
+        configured = [
+            (name.title(), name) for name, config in settings["providers"].items()
+            if config["enabled"] and config["model"]
+        ]
+        provider_select = self.query_one("#insights-provider", Select)
+        provider_select.set_options(configured)
+        enabled_names = {value for _, value in configured}
+        if settings["primary_provider"] in enabled_names:
+            provider_select.value = settings["primary_provider"]
+        elif configured:
+            provider_select.value = configured[0][1]
+        sessions = insights.list_sessions(app.insights_dir)
+        self.query_one("#insights-sessions", Select).set_options([
+            (f"{item['mode'].replace('_', ' ').title()} · {item['updated_at']}", item["id"])
+            for item in sessions
+        ])
+        status = f"{len(configured)} provider(s) ready · sessions: {app.insights_dir}"
+        self.query_one("#insights-status", Static).update(status)
+
+    @on(Select.Changed, "#insights-mode")
+    def _mode_changed(self, event: Select.Changed) -> None:
+        if event.value == "gear_research":
+            self.query_one("#insights-research", Checkbox).value = True
+
+    @on(Select.Changed, "#insights-provider")
+    def _provider_changed(self, event: Select.Changed) -> None:
+        if event.value == "local" and self.query_one("#insights-research", Checkbox).value:
+            self.query_one("#insights-research", Checkbox).value = False
+            self.app.notify("Local models use library context only", severity="information")
+
+    def _run_inputs(self):
+        mode = self.query_one("#insights-mode", Select).value
+        scope = self.query_one("#insights-scope", Select).value
+        provider = self.query_one("#insights-provider", Select).value
+        trip_id = self.query_one("#insights-trip", Select).value
+        research = self.query_one("#insights-research", Checkbox).value
+        goal = self.query_one("#insights-goal", TextArea).text.strip()
+        if mode is Select.BLANK or scope is Select.BLANK or provider is Select.BLANK:
+            raise insights.InsightError("Choose a mode, scope, and configured provider")
+        research = bool(research or mode == "gear_research")
+        if scope == "trip" and trip_id is Select.BLANK:
+            raise insights.InsightError("Choose a trip for trip-scoped analysis")
+        if research and provider == "local":
+            raise insights.InsightError("The local provider does not support web research")
+        return str(mode), str(scope), str(provider), None if trip_id is Select.BLANK else str(trip_id), research, goal
+
+    @on(Button.Pressed, "#insights-run")
+    def _run_pressed(self) -> None:
+        try:
+            values = self._run_inputs()
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        provider = values[2]
+        config = app.insights_settings["providers"][provider]
+        default_url = preferences.DEFAULT_INSIGHTS_SETTINGS["providers"][provider]["base_url"]
+        custom_cloud = provider != "local" and insights.provider_base_url(
+            provider, config["base_url"]
+        ) != default_url
+        warnings = []
+        if values[4]:
+            warnings.append("enable provider web research, which may have additional charges")
+        if custom_cloud:
+            warnings.append("send this provider's API key to its configured custom URL")
+        if warnings:
+            self.app.push_screen(
+                ConfirmScreen("This run will " + " and ".join(warnings) + ". Continue?"),
+                lambda confirmed: self._start_single(values) if confirmed else None,
+            )
+        else:
+            self._start_single(values)
+
+    def _start_single(self, values) -> None:
+        self._cancel_event.clear()
+        self.query_one("#insights-status", Static).update(
+            "Analyzing… Packrat remains usable while the provider responds."
+        )
+        self._run_provider(values, council=False)
+
+    @on(Button.Pressed, "#insights-council")
+    def _council_pressed(self) -> None:
+        try:
+            values = self._run_inputs()
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        custom = [
+            name for name, config in app.insights_settings["providers"].items()
+            if name != "local" and config["enabled"] and insights.provider_base_url(name, config["base_url"])
+            != preferences.DEFAULT_INSIGHTS_SETTINGS["providers"][name]["base_url"]
+        ]
+        message = "Run every configured provider and a synthesis call? This may incur additional charges."
+        if custom:
+            message += " API keys will be sent to custom URLs for: " + ", ".join(custom) + "."
+        self.app.push_screen(
+            ConfirmScreen(message),
+            lambda confirmed: self._start_council(values) if confirmed else None,
+        )
+
+    def _start_council(self, values) -> None:
+        self._cancel_event.clear()
+        self.query_one("#insights-status", Static).update("Council is analyzing in parallel…")
+        self._run_provider(values, council=True)
+
+    @on(Button.Pressed, "#insights-cancel")
+    def _cancel_run(self) -> None:
+        self._cancel_event.set()
+        cancelled = self.workers.cancel_group(self, "insight-run")
+        if cancelled:
+            self.query_one("#insights-status", Static).update("Insight run cancelled")
+
+    @work(thread=True, exclusive=True, group="insight-run")
+    def _run_provider(self, values, council=False) -> None:
+        mode, scope, provider, trip_id, research, goal = values
+        app: "GearTrackerApp" = self.app  # type: ignore
+        try:
+            if self.current_session is None:
+                packet = insights.build_context_packet(app.data, scope, trip_id)
+                session = insights.new_session(mode, scope, packet, goal, provider, research, trip_id)
+            else:
+                session = copy.deepcopy(self.current_session)
+                packet = session["context"]
+            history = [
+                {"user": turn.get("goal", ""), "assistant": turn.get("result", {}).get("answer_markdown", "")}
+                for turn in session["turns"]
+            ]
+            prompt = insights.build_prompt(mode, packet, goal, history, research)
+            client = insights.ProviderClient()
+            if council:
+                result = insights.run_council(
+                    client, app.insights_settings["providers"], app.insights_settings["primary_provider"],
+                    prompt, research,
+                )
+            else:
+                config = app.insights_settings["providers"][provider]
+                received = [0]
+                def progress(delta: str) -> None:
+                    if self._cancel_event.is_set():
+                        raise insights.InsightCancelled("Insight run cancelled")
+                    received[0] += len(delta)
+                    if received[0] == len(delta) or received[0] % 200 < len(delta):
+                        self.app.call_from_thread(
+                            self.query_one("#insights-status", Static).update,
+                            f"Receiving response… {received[0]} characters",
+                        )
+                result = insights.run_with_repair(
+                    client, provider, config, prompt, research, on_delta=progress
+                )
+            if self._cancel_event.is_set():
+                raise insights.InsightCancelled("Insight run cancelled")
+            try:
+                result["proposals"] = insights.validate_proposals(app.data, result.get("proposals", []), trip_id)
+            except insights.InsightError as exc:
+                result["proposal_error"] = str(exc)
+                result["proposals"] = []
+            result.pop("raw", None)
+            session["turns"].append({"goal": goal, "created_at": insights._utc_now(), "result": result})
+            insights.save_session(app.insights_dir, session)
+        except insights.InsightCancelled:
+            return
+        except (OSError, insights.InsightError) as exc:
+            self.app.call_from_thread(self._show_error, str(exc))
+            return
+        self.app.call_from_thread(self._show_result, session, result)
+
+    def _show_error(self, message: str) -> None:
+        self.query_one("#insights-status", Static).update(f"Failed: {message}")
+        self.app.notify(message, severity="error", timeout=8)
+
+    def _show_result(self, session, result) -> None:
+        self.current_session = session
+        self.current_result = result
+        markdown = result.get("answer_markdown", "No narrative response.")
+        citations = result.get("citations", [])
+        if citations:
+            markdown += "\n\n## Sources\n" + "\n".join(
+                f"- [{item['title']}]({item['url']})" for item in citations
+            )
+        council_results = result.get("council_results", {})
+        for name, answer in council_results.items():
+            markdown += f"\n\n---\n\n## {name.title()}\n\n{answer.get('answer_markdown', '')}"
+        self.query_one("#insights-result", VerticalScroll).query_one(Markdown).update(markdown)
+        proposal_count = len(result.get("proposals", []))
+        usage = result.get("usage", {})
+        status = f"Saved session · {proposal_count} reviewable change(s)"
+        if usage:
+            status += f" · usage: {usage}"
+        if result.get("proposal_error"):
+            status += f" · changes disabled: {result['proposal_error']}"
+        self.query_one("#insights-status", Static).update(status)
+        self.refresh_options()
+
+    @on(Button.Pressed, "#insights-new")
+    def _new_session(self) -> None:
+        self.current_session = None
+        self.current_result = None
+        self.query_one("#insights-goal", TextArea).clear()
+        self.query_one("#insights-result", VerticalScroll).query_one(Markdown).update(
+            "# New insight session\n\nChoose context and ask a question."
+        )
+
+    @on(Button.Pressed, "#insights-refresh")
+    def _refresh_context(self) -> None:
+        if not self.current_session:
+            self.app.notify("Load or run a session first", severity="warning")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        try:
+            packet = insights.build_context_packet(
+                app.data, self.current_session["scope"], self.current_session.get("trip_id")
+            )
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        revisions = self.current_session.setdefault("context_revisions", [])
+        revisions.append({
+            "replaced_at": insights._utc_now(),
+            "context": self.current_session["context"],
+        })
+        self.current_session["context"] = packet
+        insights.save_session(app.insights_dir, self.current_session)
+        self.query_one("#insights-status", Static).update(
+            f"Context refreshed · {len(revisions)} prior snapshot(s) retained"
+        )
+
+    @on(Button.Pressed, "#insights-settings")
+    def _settings(self) -> None:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        def handled(saved: bool) -> None:
+            if saved:
+                app.insights_settings = preferences.load_insights_settings(app.preferences_path)
+                self.refresh_options()
+        self.app.push_screen(InsightsSettingsScreen(app.insights_settings, app.preferences_path), handled)
+
+    @on(Button.Pressed, "#insights-profile")
+    def _profile(self) -> None:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        def handled(profile: Optional[dict]) -> None:
+            if profile is None:
+                return
+            app.data["insights_profile"] = profile
+            if app.save():
+                self.app.notify("Pack profile saved")
+        self.app.push_screen(InsightsProfileScreen(app.data["insights_profile"]), handled)
+
+    @on(Button.Pressed, "#insights-review")
+    def _review(self) -> None:
+        if not self.current_result or not self.current_result.get("proposals"):
+            self.app.notify("This result has no valid reviewable changes", severity="warning")
+            return
+        self.app.push_screen(ProposalReviewScreen(self.current_result["proposals"]), self._apply_proposals)
+
+    def _apply_proposals(self, selected: Optional[List[dict]]) -> None:
+        if not selected:
+            return
+        self._review_gear_drafts(list(selected), [])
+
+    def _review_gear_drafts(self, remaining: List[dict], approved: List[dict]) -> None:
+        if not remaining:
+            self._commit_proposals(approved)
+            return
+        proposal = remaining.pop(0)
+        kind = proposal["type"]
+        if kind not in {"gear_create", "gear_update"}:
+            approved.append(proposal)
+            self._review_gear_drafts(remaining, approved)
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        if kind == "gear_create":
+            initial = copy.deepcopy(proposal["gear"])
+            mode = "add"
+        else:
+            current = gc.find_gear(app.data, proposal["gear_id"])
+            initial = copy.deepcopy(current)
+            initial.update(copy.deepcopy(proposal["changes"]))
+            mode = "edit"
+
+        def handled(result: Optional[dict]) -> None:
+            if result is not None:
+                if kind == "gear_create":
+                    result.pop("id", None)
+                    approved.append({
+                        "type": "gear_create", "gear": result,
+                        "reason": proposal.get("reason", "AI gear draft"),
+                    })
+                else:
+                    approved.append({
+                        "type": "gear_update", "gear_id": proposal["gear_id"],
+                        "changes": result, "reason": proposal.get("reason", "AI gear edit"),
+                    })
+            self._review_gear_drafts(remaining, approved)
+
+        self.app.push_screen(GearFormScreen(mode=mode, initial=initial), handled)
+
+    def _commit_proposals(self, selected: List[dict]) -> None:
+        if not selected:
+            self.app.notify("No proposed changes were approved", severity="information")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        trip_id = self.current_session.get("trip_id") if self.current_session else None
+        try:
+            changed, summaries = insights.apply_proposals(app.data, selected, trip_id)
+        except (gc.DataValidationError, insights.InsightError) as exc:
+            self.app.notify(f"Could not apply changes: {exc}", severity="error", timeout=7)
+            return
+        app.data = changed
+        if app.save():
+            if self.current_session:
+                self.current_session["applied_proposals"].extend(selected)
+                insights.save_session(app.insights_dir, self.current_session)
+            app._refresh_tab("gear")
+            app._refresh_tab("trips")
+            self.app.notify("; ".join(summaries), title="AI changes applied", timeout=7)
+
+    @on(Button.Pressed, "#insights-load")
+    def _load_session(self) -> None:
+        selected = self.query_one("#insights-sessions", Select).value
+        if selected is Select.BLANK:
+            self.app.notify("Choose a saved session", severity="warning")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        try:
+            session = insights.load_session(os.path.join(app.insights_dir, f"{selected}.json"))
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        self.current_session = session
+        if session["turns"]:
+            self._show_result(session, session["turns"][-1]["result"])
+
+    @on(Button.Pressed, "#insights-export")
+    def _export_session(self) -> None:
+        if not self.current_session:
+            self.app.notify("Load or run a session first", severity="warning")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        filename = f"insight_{self.current_session['id'][:8]}_{date.today().isoformat()}.md"
+        app.write_export(filename, insights.render_session_markdown(self.current_session))
+
+
+# ---------------------------------------------------------------------------
 # Reports pane
 # ---------------------------------------------------------------------------
 
@@ -1586,6 +2248,7 @@ class GearTrackerApp(App):
         Binding("1", "show_tab('gear')", "Gear"),
         Binding("2", "show_tab('trips')", "Trips"),
         Binding("3", "show_tab('reports')", "Reports"),
+        Binding("4", "show_tab('insights')", "Insights"),
         Binding("slash", "search", "Search"),
         Binding("question_mark", "show_help", "Help"),
         Binding("ctrl+b", "backup", "Backup"),
@@ -1599,6 +2262,8 @@ class GearTrackerApp(App):
         self.data_path = os.path.abspath(os.path.expanduser(data_path))
         self.preferences_path = preferences_path
         self.export_dir = gc.export_dir_for_data(self.data_path)
+        self.insights_dir = insights.insights_dir_for_data(self.data_path)
+        self.insights_settings = preferences.load_insights_settings(self.preferences_path)
         self.data = gc.load_data(self.data_path)
         if not os.path.exists(self.data_path):
             gc.save_data(self.data_path, self.data)
@@ -1614,6 +2279,8 @@ class GearTrackerApp(App):
                 yield TripsPane()
             with TabPane("📄 Reports", id="reports"):
                 yield ReportsPane()
+            with TabPane("✨ Insights", id="insights"):
+                yield InsightsPane(id="insights-pane")
         yield Footer()
 
     def action_show_tab(self, tab_id: str) -> None:
@@ -1683,6 +2350,7 @@ class GearTrackerApp(App):
 
         self.data_path = destination_path
         self.export_dir = gc.export_dir_for_data(destination_path)
+        self.insights_dir = insights.insights_dir_for_data(destination_path)
         self.data = new_data
         self._data_signature = gc.file_signature(destination_path)
         self._last_saved_data = copy.deepcopy(new_data)
@@ -1713,6 +2381,8 @@ class GearTrackerApp(App):
             pane.refresh_table(pane.query_one("#trip-search", Input).value)
         elif tab_id == "reports":
             self.query_one(ReportsPane).refresh_table()
+        elif tab_id == "insights":
+            self.query_one(InsightsPane).refresh_options()
 
     def save(self) -> bool:
         try:
