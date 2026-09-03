@@ -393,6 +393,15 @@ def trips_referencing_gear(data, gear_id):
     return [t for t in data["trips"] if any(i["gear_id"] == gear_id for i in t["items"])]
 
 
+def duplicate_gear(data, gear, name=None):
+    """Return an independent gear copy with a fresh identity."""
+    duplicate = copy.deepcopy(gear)
+    duplicate["id"] = next_id(data["gear"], "G")
+    duplicate["name"] = name or f"{gear['name']} (Copy)"
+    duplicate["added"] = date.today().isoformat()
+    return duplicate
+
+
 def duplicate_trip(data, trip, name=None):
     """Return an independent copy of a trip with a fresh identity."""
     duplicate = copy.deepcopy(trip)
@@ -500,11 +509,12 @@ def compute_trip_summary(data, trip):
             consumable_oz += oz
         if gear["category"] in category_oz:
             category_oz[gear["category"]] += oz
-        total_cost += gear.get("cost", 0.0) or 0.0
+        trip_qty = entry.get("qty", gear.get("qty", 1))
+        total_cost += (gear.get("cost", 0.0) or 0.0) * trip_qty
         rows.append({
             "gear": gear,
             "trip_note": entry.get("note", ""),
-            "trip_qty": entry.get("qty", gear.get("qty", 1)),
+            "trip_qty": trip_qty,
             "total_oz": oz,
             "review_flag": is_review_flagged(gear),
         })
@@ -515,7 +525,7 @@ def compute_trip_summary(data, trip):
     total_oz_all = base_oz + worn_oz + consumable_oz
     total_lb = total_oz_all / 16
     target_lb = trip.get("target_base_weight_lb")
-    delta_lb = (base_lb - target_lb) if target_lb else None
+    delta_lb = (base_lb - target_lb) if target_lb is not None else None
 
     big_three_oz = sum(oz for cat, oz in category_oz.items() if cat in BIG_THREE)
 
@@ -571,7 +581,7 @@ def render_trip_markdown(data, trip):
     if s["unit_count"] != s["item_count"]:
         item_label += f" / {s['unit_count']} total units"
     meta_bits.append(item_label)
-    if s["target_lb"]:
+    if s["target_lb"] is not None:
         meta_bits.append(f"target base **{format_weight_oz(s['target_lb'] * 16)}**")
     add(" · ".join(meta_bits))
     add("")
@@ -700,7 +710,7 @@ def render_inventory_markdown(data):
     add = L.append
     gear = data["gear"]
     total_oz_all = sum(total_weight_oz(g) for g in gear)
-    total_cost_all = sum(g.get("cost", 0.0) or 0.0 for g in gear)
+    total_cost_all = sum((g.get("cost", 0.0) or 0.0) * g["qty"] for g in gear)
 
     add("# 🎒 Gear Inventory")
     add("")
@@ -747,7 +757,7 @@ def render_inventory_markdown(data):
         emoji = CATEGORY_EMOJI.get(cat, "")
         add(f"### {emoji} {cat} — {format_weight_oz(cat_oz)}")
         add("")
-        add("| Item | Brand | Weight | Type | Qty | Useful. | Cost | |")
+        add("| Item | Brand | Weight | Type | Qty | Useful. | Cost / unit | |")
         add("|---|---|---:|---|---:|---:|---:|---|")
         for g in sorted(by_cat[cat], key=lambda x: -total_weight_oz(x)):
             flag = "⚠️" if is_review_flagged(g) else ""

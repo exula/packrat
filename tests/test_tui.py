@@ -55,6 +55,23 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(app.data["gear"]), starting_count + 1)
                 self.assertEqual(app.data["gear"][-1]["name"], "test")
 
+    async def test_gear_duplicate_hotkey_creates_an_independent_variant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            starting_count = len(app.data["gear"])
+            async with app.run_test(size=(120, 40)) as pilot:
+                table = app.query_one("#gear-table")
+                table.focus()
+                source_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+                source = copy.deepcopy(gc.find_gear(app.data, source_id))
+                await pilot.press("d")
+                self.assertEqual(len(app.data["gear"]), starting_count + 1)
+                duplicate = app.data["gear"][-1]
+                self.assertEqual(duplicate["id"], "G007")
+                self.assertEqual(duplicate["name"], f"{source['name']} (Copy)")
+                duplicate["notes"] = "variant-only"
+                self.assertEqual(gc.find_gear(app.data, source_id)["notes"], source["notes"])
+
     async def test_forms_reject_non_finite_numbers_before_persistence(self):
         with tempfile.TemporaryDirectory() as directory:
             app = GearTrackerApp(str(Path(directory) / "gear.json"))
@@ -137,6 +154,7 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 gear_search.value = "nothing could match this"
                 await pilot.pause()
                 self.assertTrue(app.query_one("#gear-edit", Button).disabled)
+                self.assertTrue(app.query_one("#gear-duplicate", Button).disabled)
                 self.assertTrue(app.query_one("#gear-delete", Button).disabled)
                 self.assertIn("No matching gear", str(app.query_one("#gear-status", Static).render()))
 

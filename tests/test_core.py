@@ -116,7 +116,26 @@ class SummaryTests(unittest.TestCase):
         row = next(row for row in summary["rows"] if row["gear"]["id"] == gear["id"])
         self.assertEqual(row["trip_qty"], 2)
         self.assertEqual(row["total_oz"], 5.2)
+        self.assertEqual(summary["total_cost"], 450 + 550 + (45 * 2) + 25 + 170)
         self.assertIn("×2", gc.render_trip_markdown(data, data["trips"][0]))
+
+    def test_zero_target_is_distinct_from_no_target(self):
+        data = gc.example_data()
+        trip = data["trips"][0]
+        trip["target_base_weight_lb"] = 0.0
+        summary = gc.compute_trip_summary(data, trip)
+        self.assertEqual(summary["delta_lb"], summary["base_lb"])
+        export = gc.render_trip_markdown(data, trip)
+        self.assertIn("0.0 oz · 0.00 lb · 0.0 g", export)
+        self.assertIn("over", export.lower())
+
+    def test_inventory_value_uses_inventory_quantity(self):
+        data = gc.example_data()
+        data["gear"][0]["qty"] = 2
+        export = gc.render_inventory_markdown(data)
+        expected = sum(item["cost"] * item["qty"] for item in data["gear"])
+        self.assertIn(f"${expected:,.2f} total value", export)
+        self.assertIn("Cost / unit", export)
 
     def test_review_candidates_remain_in_export_with_pack_audit(self):
         data = gc.example_data()
@@ -153,6 +172,14 @@ class PlanningWorkflowTests(unittest.TestCase):
         duplicate["audit"]["Water"] = "omitted"
         self.assertEqual(self.trip["items"][0]["qty"], 1)
         self.assertNotIn("Water", self.trip["audit"])
+
+    def test_duplicate_gear_is_independent_and_gets_next_id(self):
+        source = self.data["gear"][0]
+        duplicate = gc.duplicate_gear(self.data, source)
+        self.assertEqual(duplicate["id"], "G007")
+        self.assertEqual(duplicate["name"], f"{source['name']} (Copy)")
+        duplicate["notes"] = "changed"
+        self.assertNotEqual(source["notes"], duplicate["notes"])
 
     def test_compare_trips_reports_membership_quantity_and_weight_deltas(self):
         duplicate = gc.duplicate_trip(self.data, self.trip, "Alternative")

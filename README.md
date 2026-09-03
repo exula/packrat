@@ -60,7 +60,7 @@ are:
 
 - **1 / 2 / 3 / 4** switches between Gear, Trips, Reports, and Insights.
 - **/** focuses the search box; **Esc** clears search and returns to the table.
-- **A** adds, **E** edits, **Delete** deletes/removes, and **R** toggles review
+- **A** adds, **E** edits, **D** duplicates, **Delete** deletes/removes, and **R** toggles review
   candidates when the relevant table is focused.
 - In Trips, **D** duplicates and **C** compares. In a trip dashboard, **I**
   edits an item's quantity/note and **P** opens the pack audit.
@@ -73,7 +73,8 @@ are:
   to open/edit it. This two-step click mirrors how most file browsers work
   — a highlight first, then an activation — so you never open the wrong
   item by accident.
-- **Gear Inventory tab** — search, add, edit, delete gear. The "Review
+- **Gear Inventory tab** — search, add, edit, duplicate, and delete gear. Duplication
+  creates an independent copy for quickly recording a similar item or variant. The "Review
   Candidates" button filters to items rated low usefulness (<3/5) *and*
   over 8 oz — good first candidates to cut. Enter each item's per-unit weight
   in ounces; Packrat immediately previews and displays the equivalent ounces,

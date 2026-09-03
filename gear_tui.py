@@ -424,7 +424,7 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
                         yield Select([(str(i), i) for i in range(1, 6)], id="f-usefulness", allow_blank=False,
                                      value=self.initial.get("usefulness", 3))
                     with Vertical(classes="field-col"):
-                        yield Label("Cost ($)")
+                        yield Label("Cost per unit ($)")
                         yield Input(value=str(self.initial.get("cost", 0)), id="f-cost", type="number")
                 yield Label("Notes")
                 yield Input(value=self.initial.get("notes", ""), id="f-notes")
@@ -518,7 +518,8 @@ class TripFormScreen(ModalScreen[Optional[dict]]):
             yield Label("Dates / Season")
             yield Input(value=self.initial.get("dates", ""), id="t-dates", placeholder="e.g. Late October")
             yield Label("Target Base Weight (lb)")
-            yield Input(value=str(self.initial.get("target_base_weight_lb") or ""), id="t-target", type="number")
+            target = self.initial.get("target_base_weight_lb")
+            yield Input(value="" if target is None else str(target), id="t-target", type="number")
             yield Label("Notes")
             yield Input(value=self.initial.get("notes", ""), id="t-notes")
             with Horizontal(classes="dialog-buttons"):
@@ -876,6 +877,7 @@ class ShortcutHelpScreen(ModalScreen[None]):
                  Ctrl+B  Backup data   Ctrl+P  Preferences   Q  Quit
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
+[b]Gear variants[/b]  D  Duplicate selected gear
 [b]Trips[/b]          A  Add      Enter  Open  D  Duplicate  C  Compare  Delete  Delete
 [b]Trip dashboard[/b] A  Add item I  Edit qty/note E  Edit trip P  Pack audit
                  Delete  Remove     X  Export
@@ -962,7 +964,7 @@ class TripDashboardScreen(Screen):
             f"Consumable {gc.format_weight_oz(s['consumable_oz'])}\n"
             f"Total [b]{gc.format_weight_oz(s['total_oz'])}[/b] skin-out"
         ]
-        if s["target_lb"]:
+        if s["target_lb"] is not None:
             if s["delta_lb"] <= 0:
                 lines.append(f"[#7CD992]{gc.format_weight_oz(abs(s['delta_lb']) * 16)} under target "
                              f"({gc.format_weight_oz(s['target_lb'] * 16)})[/#7CD992]")
@@ -1146,6 +1148,7 @@ class GearPane(Vertical):
     BINDINGS = [
         Binding("a", "add", "Add"),
         Binding("e", "edit", "Edit"),
+        Binding("d", "duplicate", "Duplicate"),
         Binding("delete", "delete", "Delete"),
         Binding("r", "review", "Review"),
         Binding("escape", "clear_search", "Clear search", show=False),
@@ -1158,6 +1161,7 @@ class GearPane(Vertical):
         yield DataTable(id="gear-table", cursor_type="row", zebra_stripes=True)
         with Horizontal(classes="toolbar"):
             yield Button("Edit", id="gear-edit", variant="primary")
+            yield Button("Duplicate", id="gear-duplicate", variant="primary")
             yield Button("Delete", id="gear-delete", variant="error")
             yield Button("Review Candidates", id="gear-review")
             yield Static(id="gear-status", classes="status")
@@ -1190,6 +1194,7 @@ class GearPane(Vertical):
             table.move_cursor(row=table.get_row_index(selected_id), animate=False)
         has_rows = count > 0
         self.query_one("#gear-edit", Button).disabled = not has_rows
+        self.query_one("#gear-duplicate", Button).disabled = not has_rows
         self.query_one("#gear-delete", Button).disabled = not has_rows
         if not has_rows and review_only:
             label = "No review candidates · select Review Candidates to show all gear"
@@ -1217,6 +1222,9 @@ class GearPane(Vertical):
 
     def action_delete(self) -> None:
         self._delete()
+
+    def action_duplicate(self) -> None:
+        self._duplicate()
 
     def action_review(self) -> None:
         self._toggle_review()
@@ -1276,6 +1284,28 @@ class GearPane(Vertical):
     @on(Button.Pressed, "#gear-edit")
     def _edit_button(self) -> None:
         self._edit_gear(self._current_gear_id())
+
+    @on(Button.Pressed, "#gear-duplicate")
+    def _duplicate(self) -> None:
+        gear_id = self._current_gear_id()
+        if gear_id is None:
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        source = gc.find_gear(app.data, gear_id)
+        if source is None:
+            return
+        duplicate = gc.duplicate_gear(app.data, source)
+        app.data["gear"].append(duplicate)
+        if not app.save():
+            self._refresh_current()
+            return
+        self._refresh_current()
+        table = self.query_one("#gear-table", DataTable)
+        try:
+            table.move_cursor(row=table.get_row_index(duplicate["id"]), animate=False)
+        except KeyError:
+            pass
+        self.app.notify(f"Created {duplicate['name']}", timeout=3)
 
     @on(Button.Pressed, "#gear-delete")
     def _delete(self) -> None:
@@ -1356,7 +1386,10 @@ class TripsPane(Vertical):
             if t and t not in blob:
                 continue
             s = gc.compute_trip_summary(app.data, trip)
-            target = gc.format_weight_oz(s["target_lb"] * 16) if s["target_lb"] else "-"
+            target = (
+                gc.format_weight_oz(s["target_lb"] * 16)
+                if s["target_lb"] is not None else "-"
+            )
             if s["delta_lb"] is None:
                 delta = "-"
             elif s["delta_lb"] <= 0:
