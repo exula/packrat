@@ -988,6 +988,12 @@ class TripDashboardScreen(Screen):
             items_table.add_row(g["id"], g["category"], g["name"], str(row["trip_qty"]),
                                 gc.format_weight_oz(row["total_oz"]),
                                 flag, row["trip_note"], key=g["id"])
+        has_items = items_table.row_count > 0
+        assigned_ids = {item["gear_id"] for item in trip["items"]}
+        has_available_gear = any(gear["id"] not in assigned_ids for gear in app.data["gear"])
+        self.query_one("#dash-add-item", Button).disabled = not has_available_gear
+        self.query_one("#dash-edit-item", Button).disabled = not has_items
+        self.query_one("#dash-remove-item", Button).disabled = not has_items
 
     def action_go_back(self) -> None:
         self.dismiss()
@@ -1170,7 +1176,15 @@ class GearPane(Vertical):
             visible_ids.add(g["id"])
         if selected_id in visible_ids:
             table.move_cursor(row=table.get_row_index(selected_id), animate=False)
-        label = f"{count} item(s)" + (" · review filter on" if review_only else "")
+        has_rows = count > 0
+        self.query_one("#gear-edit", Button).disabled = not has_rows
+        self.query_one("#gear-delete", Button).disabled = not has_rows
+        if not has_rows and review_only:
+            label = "No review candidates · select Review Candidates to show all gear"
+        elif not has_rows and t:
+            label = "No matching gear · press Esc to clear the search"
+        else:
+            label = f"{count} item(s)" + (" · review filter on" if review_only else "")
         self.query_one("#gear-status", Static).update(label)
 
     @on(Input.Changed, "#gear-search")
@@ -1343,7 +1357,16 @@ class TripsPane(Vertical):
             visible_ids.add(trip["id"])
         if selected_id in visible_ids:
             table.move_cursor(row=table.get_row_index(selected_id), animate=False)
-        self.query_one("#trip-status", Static).update(f"{count} trip(s)")
+        has_rows = count > 0
+        self.query_one("#trip-open", Button).disabled = not has_rows
+        self.query_one("#trip-duplicate", Button).disabled = not has_rows
+        self.query_one("#trip-delete", Button).disabled = not has_rows
+        self.query_one("#trip-compare", Button).disabled = not has_rows or len(app.data["trips"]) < 2
+        status = (
+            "No matching trips · press Esc to clear the search"
+            if not has_rows and t else f"{count} trip(s)"
+        )
+        self.query_one("#trip-status", Static).update(status)
 
     @on(Input.Changed, "#trip-search")
     def _search_changed(self, event: Input.Changed) -> None:
@@ -2123,6 +2146,7 @@ class ReportsPane(Vertical):
         table.clear()
         for trip in app.data["trips"]:
             table.add_row(trip["id"], trip["name"], trip.get("dates", ""), str(len(trip["items"])), key=trip["id"])
+        self.query_one("#report-export-trip", Button).disabled = table.row_count == 0
 
     @on(Button.Pressed, "#report-export-trip")
     def _export_trip(self) -> None:

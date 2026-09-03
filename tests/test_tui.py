@@ -106,6 +106,38 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("down", "down", "space", "ctrl+s")
                 self.assertTrue(app.data["trips"][1]["audit"])
 
+    async def test_context_actions_follow_visible_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            async with app.run_test(size=(120, 40)) as pilot:
+                gear_search = app.query_one("#gear-search", Input)
+                gear_search.value = "nothing could match this"
+                await pilot.pause()
+                self.assertTrue(app.query_one("#gear-edit", Button).disabled)
+                self.assertTrue(app.query_one("#gear-delete", Button).disabled)
+                self.assertIn("No matching gear", str(app.query_one("#gear-status", Static).render()))
+
+                gear_search.value = ""
+                await pilot.press("2")
+                self.assertTrue(app.query_one("#trip-compare", Button).disabled)
+                app.query_one("#trip-search", Input).value = "nothing could match this"
+                await pilot.pause()
+                self.assertTrue(app.query_one("#trip-open", Button).disabled)
+                self.assertTrue(app.query_one("#trip-duplicate", Button).disabled)
+                self.assertTrue(app.query_one("#trip-delete", Button).disabled)
+
+                app.data["trips"][0]["items"] = []
+                app.push_screen(TripDashboardScreen("T001"))
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#dash-edit-item", Button).disabled)
+                self.assertTrue(app.screen.query_one("#dash-remove-item", Button).disabled)
+                self.assertFalse(app.screen.query_one("#dash-add-item", Button).disabled)
+                await pilot.press("escape")
+
+                app.data["trips"].clear()
+                await pilot.press("3")
+                self.assertTrue(app.query_one("#report-export-trip", Button).disabled)
+
 
 class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def test_first_run_creates_example_library_and_remembers_folder(self):
