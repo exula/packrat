@@ -15,6 +15,7 @@ from gear_tui import (
     SetupApp,
     TripComparisonScreen,
     TripDashboardScreen,
+    TripFormScreen,
     TripItemFormScreen,
 )
 import gear_core as gc
@@ -53,6 +54,28 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("t", "e", "s", "t", "ctrl+s")
                 self.assertEqual(len(app.data["gear"]), starting_count + 1)
                 self.assertEqual(app.data["gear"][-1]["name"], "test")
+
+    async def test_forms_reject_non_finite_numbers_before_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            starting_gear = copy.deepcopy(app.data["gear"])
+            async with app.run_test(size=(100, 32)) as pilot:
+                app.push_screen(GearFormScreen(mode="add"))
+                await pilot.pause()
+                app.screen.query_one("#f-name", Input).value = "Impossible item"
+                app.screen.query_one("#f-weight", Input).value = "1e309"
+                await pilot.press("ctrl+s")
+                self.assertIsInstance(app.screen, GearFormScreen)
+                self.assertEqual(app.data["gear"], starting_gear)
+                await pilot.press("escape")
+
+                app.push_screen(TripFormScreen(mode="add"))
+                await pilot.pause()
+                app.screen.query_one("#t-name", Input).value = "Impossible trip"
+                app.screen.query_one("#t-target", Input).value = "1e309"
+                await pilot.press("ctrl+s")
+                self.assertIsInstance(app.screen, TripFormScreen)
+                self.assertEqual(len(app.data["trips"]), 1)
 
     async def test_compact_gear_form_keeps_actions_visible_and_previews_weight(self):
         with tempfile.TemporaryDirectory() as directory:

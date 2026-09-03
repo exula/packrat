@@ -17,7 +17,7 @@ from gear_tui import (
     ProposalReviewScreen,
 )
 from textual.containers import VerticalScroll
-from textual.widgets import Button, Checkbox, Select, TabbedContent, TextArea
+from textual.widgets import Button, Checkbox, Input, Select, TabbedContent, TextArea
 
 
 class InsightCoreTests(unittest.TestCase):
@@ -234,6 +234,59 @@ class ProviderTests(unittest.TestCase):
 
 
 class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_test_only_saves_after_a_successful_connection(self):
+        class FakeClient:
+            should_fail = True
+
+            def list_models(self, provider, config, api_key=None):
+                if self.should_fail:
+                    raise insights.InsightError("Connection refused")
+                self.provider = provider
+                self.api_key = api_key
+                return [config["model"]]
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_path = Path(directory) / "gear_data.json"
+            preference_path = Path(directory) / "preferences.json"
+            gc.save_data(data_path, gc.example_data())
+            app = GearTrackerApp(str(data_path), preferences_path=str(preference_path))
+            fake_client = FakeClient()
+            with patch("gear_tui.insights.ProviderClient", return_value=fake_client), patch(
+                "gear_tui.insights.CredentialStore.set"
+            ) as set_key:
+                async with app.run_test() as pilot:
+                    await pilot.press("4")
+                    pane = app.query_one(InsightsPane)
+                    pane.query_one("#insights-settings").press()
+                    await pilot.pause()
+                    screen = app.screen
+                    screen.query_one("#settings-local-enabled", Checkbox).value = True
+                    screen.query_one("#settings-local-model", Input).value = "test-model"
+                    screen.query_one("#settings-local-key", Input).value = "test-key"
+                    screen.query_one("#settings-primary", Select).value = "local"
+                    screen.query_one("#settings-test").press()
+                    for _ in range(30):
+                        if "Connection refused" in str(screen.query_one("#settings-status").render()):
+                            break
+                        await asyncio.sleep(0.02)
+                        await pilot.pause()
+                    self.assertIs(app.screen, screen)
+                    self.assertFalse(
+                        preferences.load_insights_settings(preference_path)["providers"]["local"]["enabled"]
+                    )
+                    self.assertFalse(screen.query_one("#settings-test", Button).disabled)
+
+                    fake_client.should_fail = False
+                    screen.query_one("#settings-test").press()
+                    for _ in range(30):
+                        if app.screen is not screen:
+                            break
+                        await asyncio.sleep(0.02)
+                        await pilot.pause()
+                    self.assertIsNot(app.screen, screen)
+                    self.assertTrue(app.insights_settings["providers"]["local"]["enabled"])
+                    set_key.assert_called_with("local", "test-key")
+
     async def test_insights_navigation_profile_and_provider_setup(self):
         with tempfile.TemporaryDirectory() as directory:
             data_path = Path(directory) / "gear_data.json"

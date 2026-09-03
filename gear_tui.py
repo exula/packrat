@@ -475,6 +475,9 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
         except ValueError:
             self.app.notify("Weight, quantity, and cost must be numbers", severity="error")
             return
+        if not math.isfinite(weight) or not math.isfinite(cost):
+            self.app.notify("Weight and cost must be finite numbers", severity="error")
+            return
         if weight < 0 or cost < 0 or qty < 1:
             self.app.notify("Weight/cost cannot be negative and quantity must be at least 1", severity="error")
             return
@@ -546,6 +549,9 @@ class TripFormScreen(ModalScreen[Optional[dict]]):
             target = float(target_raw) if target_raw else None
         except ValueError:
             self.app.notify("Target base weight must be a number", severity="error")
+            return
+        if target is not None and not math.isfinite(target):
+            self.app.notify("Target base weight must be a finite number", severity="error")
             return
         if target is not None and target < 0:
             self.app.notify("Target base weight cannot be negative", severity="error")
@@ -1589,8 +1595,8 @@ class InsightsSettingsScreen(ModalScreen[bool]):
             value["providers"][name] = {"enabled": enabled, "model": model, "base_url": base_url}
         return value
 
-    def _persist(self):
-        value = self._collect()
+    def _persist(self, value=None):
+        value = value or self._collect()
         for name in insights.PROVIDERS:
             key = self.query_one(f"#settings-{name}-key", Input).value.strip()
             if key:
@@ -1598,6 +1604,7 @@ class InsightsSettingsScreen(ModalScreen[bool]):
         self.settings = preferences.save_insights_settings(value, self.preferences_path)
 
     def action_cancel(self) -> None:
+        self.workers.cancel_group(self, "provider-test")
         self.dismiss(False)
 
     def action_save(self) -> None:
@@ -1619,12 +1626,24 @@ class InsightsSettingsScreen(ModalScreen[bool]):
     @on(Button.Pressed, "#settings-test")
     def _test(self) -> None:
         try:
-            self._persist()
-        except (OSError, ValueError, preferences.PreferencesError, insights.InsightError) as exc:
+            value = self._collect()
+            provider = value["primary_provider"]
+            if not value["providers"][provider]["enabled"]:
+                raise ValueError(f"Enable {provider.title()} before testing it")
+        except ValueError as exc:
             self.query_one("#settings-status", Static).update(str(exc))
             return
+        api_key = self.query_one(f"#settings-{provider}-key", Input).value.strip() or None
+        self._set_testing(True)
         self.query_one("#settings-status", Static).update("Testing connection…")
-        self._test_primary()
+        self._test_primary(value, api_key)
+
+    def _set_testing(self, testing: bool) -> None:
+        for widget_type in (Input, Select, Checkbox):
+            for widget in self.query(widget_type):
+                widget.disabled = testing
+        for selector in ("#settings-remove-key", "#settings-test", "#settings-save"):
+            self.query_one(selector, Button).disabled = testing
 
     @on(Button.Pressed, "#settings-remove-key")
     def _remove_key(self) -> None:
@@ -1640,14 +1659,32 @@ class InsightsSettingsScreen(ModalScreen[bool]):
         self.query_one("#settings-status", Static).update(message)
 
     @work(thread=True, exclusive=True, group="provider-test")
-    def _test_primary(self) -> None:
-        provider = self.settings["primary_provider"]
+    def _test_primary(self, value, api_key) -> None:
+        provider = value["primary_provider"]
         try:
-            models = insights.ProviderClient().list_models(provider, self.settings["providers"][provider])
+            models = insights.ProviderClient().list_models(
+                provider, value["providers"][provider], api_key=api_key
+            )
             message = f"Connected. Provider returned {len(models)} model(s)."
         except insights.InsightError as exc:
-            message = str(exc)
-        self.app.call_from_thread(self.query_one("#settings-status", Static).update, message)
+            self.app.call_from_thread(self._finish_test, value, None, str(exc))
+            return
+        self.app.call_from_thread(self._finish_test, value, message, None)
+
+    def _finish_test(self, value, message, error) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        if error:
+            self.query_one("#settings-status", Static).update(error)
+            return
+        try:
+            self._persist(value)
+        except (OSError, ValueError, preferences.PreferencesError, insights.InsightError) as exc:
+            self.query_one("#settings-status", Static).update(str(exc))
+            return
+        self.app.notify(message)
+        self.dismiss(True)
 
 
 class ProposalReviewScreen(ModalScreen[Optional[List[dict]]]):

@@ -110,7 +110,9 @@ are:
 ## AI provider setup
 
 Open **Insights → Providers** and enable one or more providers. Enter a model
-ID and optionally an API key. Keys entered in Packrat are stored in the
+ID and optionally an API key. **Test Primary & Save** verifies the selected
+provider before committing the settings; a failed test leaves the prior
+configuration unchanged. Keys entered in Packrat are stored in the
 operating system keychain, never in `preferences.json`, `gear_data.json`, or
 saved insight sessions. Environment variables take precedence:
 

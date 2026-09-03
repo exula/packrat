@@ -429,8 +429,9 @@ class ProviderClient:
         except httpx.HTTPError as exc:
             raise InsightError(f"Provider connection failed ({exc.__class__.__name__})") from exc
 
-    def list_models(self, provider, config):
-        key, _ = CredentialStore.get(provider)
+    def list_models(self, provider, config, api_key=None):
+        stored_key, source = CredentialStore.get(provider)
+        key = stored_key if source == "environment" else api_key or stored_key
         base = provider_base_url(provider, config["base_url"])
         if provider != "local" and not key:
             raise InsightError("Configure an API key first")
