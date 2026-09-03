@@ -66,6 +66,8 @@ are:
   edits an item's quantity/note and **P** opens the pack audit.
 - **Ctrl+S** saves forms and picker dialogs; **Enter** confirms confirmations.
 - **Ctrl+B** writes a manual `.bak` snapshot beside your data file.
+- **Ctrl+L** reloads the current library after a sync client or another Packrat
+  process changes it on disk.
 - **Ctrl+P** opens Storage Preferences to open another library or copy the
   current library to a new folder and switch to it.
 
@@ -142,8 +144,9 @@ client changed the file after it was opened; if so, it refuses to overwrite
 that newer copy and rolls the in-memory edit back.
 
 It is still a flat JSON file rather than a mergeable database. If Packrat
-reports an external-change conflict, restart it to load the newer file before
-editing again.
+reports an external-change conflict, press **Ctrl+L** to load the newer file
+before editing again. If the newer file is malformed or missing, Packrat keeps
+the last valid in-memory library and explains the problem instead of replacing it.
 
 ## Storage preferences
 

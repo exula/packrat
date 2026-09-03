@@ -43,6 +43,39 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("escape", "ctrl+b")
                 self.assertTrue(Path(f"{path}.bak").exists())
 
+    async def test_reload_library_accepts_valid_external_changes_and_rejects_invalid_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            app = GearTrackerApp(str(path))
+            async with app.run_test(size=(120, 40)) as pilot:
+                external = copy.deepcopy(app.data)
+                external["gear"][0]["name"] = "Updated by sync"
+                gc.save_data(path, external)
+                app.query_one("#gear-table").focus()
+                await pilot.press("ctrl+l")
+                self.assertEqual(app.data["gear"][0]["name"], "Updated by sync")
+                self.assertEqual(app._data_signature, gc.file_signature(path))
+
+                await pilot.press("2")
+                await pilot.click("#trip-open")
+                self.assertIsInstance(app.screen, TripDashboardScreen)
+                dashboard_update = copy.deepcopy(app.data)
+                dashboard_update["trips"][0]["name"] = "Synced trip name"
+                gc.save_data(path, dashboard_update)
+                await pilot.press("ctrl+l")
+                self.assertIn(
+                    "Synced trip name",
+                    str(app.screen.query_one("#dash-title", Static).render()),
+                )
+                await pilot.press("escape")
+
+                valid_data = copy.deepcopy(app.data)
+                valid_signature = app._data_signature
+                path.write_text("{not valid json", encoding="utf-8")
+                await pilot.press("ctrl+l")
+                self.assertEqual(app.data, valid_data)
+                self.assertEqual(app._data_signature, valid_signature)
+
     async def test_gear_hotkey_and_ctrl_s_add_an_item(self):
         with tempfile.TemporaryDirectory() as directory:
             app = GearTrackerApp(str(Path(directory) / "gear.json"))

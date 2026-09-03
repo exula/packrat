@@ -80,7 +80,7 @@ class PersistenceTests(unittest.TestCase):
             self.assertFalse(any(p.suffix == ".tmp" for p in Path(directory).iterdir()))
 
             path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
-            with self.assertRaises(gc.DataConflictError):
+            with self.assertRaisesRegex(gc.DataConflictError, r"Ctrl\+L"):
                 gc.save_data(path, changed, expected_signature=second_signature)
 
     def test_exports_follow_custom_data_path(self):

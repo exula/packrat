@@ -874,7 +874,7 @@ class ShortcutHelpScreen(ModalScreen[None]):
         help_text = """[b]Keyboard shortcuts[/b]
 
 [b]Anywhere[/b]       1 / 2 / 3 / 4  Switch tabs  /  Search     ?  This help
-                 Ctrl+B  Backup data   Ctrl+P  Preferences   Q  Quit
+                 Ctrl+B  Backup   Ctrl+L  Reload library   Ctrl+P  Preferences   Q  Quit
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
 [b]Gear variants[/b]  D  Duplicate selected gear
@@ -2476,6 +2476,7 @@ class GearTrackerApp(App):
         Binding("slash", "search", "Search"),
         Binding("question_mark", "show_help", "Help"),
         Binding("ctrl+b", "backup", "Backup"),
+        Binding("ctrl+l", "reload_library", "Reload"),
         Binding("ctrl+p", "preferences", "Preferences", priority=True),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
@@ -2588,6 +2589,31 @@ class GearTrackerApp(App):
             self.notify(f"Backup failed: {exc}", severity="error", timeout=5)
             return
         self.notify(f"Wrote {path}", title="Backup complete", timeout=4)
+
+    def action_reload_library(self) -> None:
+        if isinstance(self.screen, (ModalScreen, TripComparisonScreen)):
+            self.notify("Close the current dialog or comparison before reloading", severity="warning")
+            return
+        if not os.path.exists(self.data_path):
+            self.notify("The current library file no longer exists", severity="error", timeout=6)
+            return
+        try:
+            reloaded = gc.load_data(self.data_path)
+        except (OSError, gc.DataValidationError) as exc:
+            self.notify(f"Reload failed; current data was kept: {exc}", severity="error", timeout=7)
+            return
+        self.data = reloaded
+        self._data_signature = gc.file_signature(self.data_path)
+        self._last_saved_data = copy.deepcopy(reloaded)
+        if isinstance(self.screen, TripDashboardScreen):
+            self.screen.refresh_dashboard()
+        else:
+            self._refresh_tab(self.query_one(TabbedContent).active)
+        self.notify(
+            f"Loaded {len(reloaded['gear'])} gear item(s) and {len(reloaded['trips'])} trip(s)",
+            title="Library reloaded",
+            timeout=4,
+        )
 
     @on(TabbedContent.TabActivated)
     def _tab_activated(self, event: TabbedContent.TabActivated) -> None:

@@ -294,7 +294,7 @@ def save_data(path, data, expected_signature=None):
     validate_data(data)
     if expected_signature is not None and file_signature(path) != expected_signature:
         raise DataConflictError(
-            "the data file changed on disk; restart Packrat to load the newer copy"
+            "the data file changed on disk; press Ctrl+L to load the newer copy"
         )
     content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     if os.path.exists(path):
