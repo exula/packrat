@@ -16,7 +16,8 @@ from gear_tui import (
     GearTrackerApp, InsightsPane, InsightsProfileScreen, InsightsSettingsScreen,
     ProposalReviewScreen,
 )
-from textual.widgets import Checkbox, Select, TabbedContent, TextArea
+from textual.containers import VerticalScroll
+from textual.widgets import Button, Checkbox, Select, TabbedContent, TextArea
 
 
 class InsightCoreTests(unittest.TestCase):
@@ -238,6 +239,15 @@ class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertEqual(app.query_one(TabbedContent).active, "insights")
                 pane = app.query_one(InsightsPane)
+                self.assertIsInstance(pane.query_one("#insights-controls"), VerticalScroll)
+                self.assertFalse(pane.query_one("#insights-trip", Select).display)
+                self.assertTrue(pane.query_one("#insights-run", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-council", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-cancel", Button).disabled)
+                pane.query_one("#insights-scope", Select).value = "trip"
+                await pilot.pause()
+                self.assertTrue(pane.query_one("#insights-trip", Select).display)
+                pane.query_one("#insights-scope", Select).value = "inventory"
                 pane.query_one("#insights-profile").press()
                 await pilot.pause()
                 self.assertIsInstance(app.screen, InsightsProfileScreen)
@@ -254,6 +264,13 @@ class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("ctrl+s")
                 await pilot.pause()
                 self.assertTrue(app.insights_settings["providers"]["local"]["enabled"])
+                self.assertFalse(pane.query_one("#insights-run", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-council", Button).disabled)
+                self.assertTrue(pane.query_one("#insights-research", Checkbox).disabled)
+                pane.query_one("#insights-mode", Select).value = "gear_research"
+                await pilot.pause()
+                self.assertTrue(pane.query_one("#insights-run", Button).disabled)
+                self.assertIn("needs a cloud provider", str(pane.query_one("#insights-status").render()))
                 self.assertNotIn("api_key", preference_path.read_text(encoding="utf-8"))
 
     async def test_complete_mocked_trip_insight_and_review_workflow(self):

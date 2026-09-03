@@ -197,13 +197,23 @@ ModalScreen {
     border-right: solid #3A4A32;
 }
 
+#insights-controls .toolbar {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+#insights-controls .toolbar Button {
+    min-width: 9;
+    margin-right: 0;
+}
+
 #insights-controls Select, #insights-controls Input, #insights-controls TextArea {
     width: 100%;
     margin-bottom: 1;
 }
 
 #insights-goal {
-    height: 8;
+    height: 6;
 }
 
 #insights-result {
@@ -1658,7 +1668,7 @@ class InsightsPane(Horizontal):
         self._cancel_event = threading.Event()
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="insights-controls"):
+        with VerticalScroll(id="insights-controls"):
             yield Label("Guided mode")
             yield Select([
                 ("Shakedown", "shakedown"), ("Trip Coach", "trip_coach"),
@@ -1670,6 +1680,9 @@ class InsightsPane(Horizontal):
             yield Select([], prompt="Choose trip", id="insights-trip")
             yield Label("Provider")
             yield Select([], prompt="Configure a provider", id="insights-provider")
+            with Horizontal(classes="toolbar"):
+                yield Button("Providers", id="insights-settings")
+                yield Button("Pack Profile", id="insights-profile")
             yield Checkbox("Research the web", id="insights-research")
             yield Label("Goal or question")
             yield TextArea("", id="insights-goal")
@@ -1682,9 +1695,6 @@ class InsightsPane(Horizontal):
                 yield Button("Refresh Context", id="insights-refresh")
             with Horizontal(classes="toolbar"):
                 yield Button("Review Changes", id="insights-review")
-            with Horizontal(classes="toolbar"):
-                yield Button("Providers", id="insights-settings")
-                yield Button("Pack Profile", id="insights-profile")
             yield Select([], prompt="Saved sessions", id="insights-sessions")
             with Horizontal(classes="toolbar"):
                 yield Button("Load", id="insights-load")
@@ -1694,6 +1704,7 @@ class InsightsPane(Horizontal):
             yield Markdown("# Packrat Insights\n\nChoose a guided mode and provider, then describe what you want to learn.")
 
     def on_mount(self) -> None:
+        self.query_one("#insights-trip", Select).display = False
         self.refresh_options()
 
     def refresh_options(self) -> None:
@@ -1712,26 +1723,64 @@ class InsightsPane(Horizontal):
             provider_select.value = settings["primary_provider"]
         elif configured:
             provider_select.value = configured[0][1]
+        self._update_control_states()
         sessions = insights.list_sessions(app.insights_dir)
         self.query_one("#insights-sessions", Select).set_options([
             (f"{item['mode'].replace('_', ' ').title()} · {item['updated_at']}", item["id"])
             for item in sessions
         ])
-        status = f"{len(configured)} provider(s) ready · sessions: {app.insights_dir}"
+        if configured:
+            status = f"{len(configured)} provider(s) ready · sessions: {app.insights_dir}"
+        else:
+            status = "No provider configured. Choose Providers to add a cloud or local model."
         self.query_one("#insights-status", Static).update(status)
+
+    def _configured_provider_count(self) -> int:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        return sum(
+            bool(config["enabled"] and config["model"])
+            for config in app.insights_settings["providers"].values()
+        )
+
+    def _update_control_states(self, running: bool = False) -> None:
+        provider_count = self._configured_provider_count()
+        provider = self.query_one("#insights-provider", Select).value
+        mode = self.query_one("#insights-mode", Select).value
+        local_research = provider == "local" and mode == "gear_research"
+        self.query_one("#insights-run", Button).disabled = (
+            running or provider_count == 0 or local_research
+        )
+        self.query_one("#insights-council", Button).disabled = running or provider_count < 2
+        self.query_one("#insights-cancel", Button).disabled = not running
+        research = self.query_one("#insights-research", Checkbox)
+        research.disabled = provider is Select.BLANK or provider == "local"
+        if research.disabled:
+            research.value = False
+        elif mode == "gear_research":
+            research.value = True
+
+    @on(Select.Changed, "#insights-scope")
+    def _scope_changed(self, event: Select.Changed) -> None:
+        self.query_one("#insights-trip", Select).display = event.value == "trip"
 
     @on(Select.Changed, "#insights-mode")
     def _mode_changed(self, event: Select.Changed) -> None:
-        if event.value == "gear_research":
-            self.query_one("#insights-research", Checkbox).value = True
+        self._update_control_states()
+        provider = self.query_one("#insights-provider", Select).value
+        if event.value == "gear_research" and provider == "local":
+            self.query_one("#insights-status", Static).update(
+                "Gear Research needs a cloud provider. Choose another provider or use Council."
+            )
 
     @on(Select.Changed, "#insights-provider")
     def _provider_changed(self, event: Select.Changed) -> None:
-        if event.value == "local" and self.query_one("#insights-research", Checkbox).value:
-            self.query_one("#insights-research", Checkbox).value = False
+        research = self.query_one("#insights-research", Checkbox)
+        was_researching = research.value
+        self._update_control_states()
+        if event.value == "local" and was_researching:
             self.app.notify("Local models use library context only", severity="information")
 
-    def _run_inputs(self):
+    def _run_inputs(self, allow_local_research: bool = False):
         mode = self.query_one("#insights-mode", Select).value
         scope = self.query_one("#insights-scope", Select).value
         provider = self.query_one("#insights-provider", Select).value
@@ -1743,7 +1792,7 @@ class InsightsPane(Horizontal):
         research = bool(research or mode == "gear_research")
         if scope == "trip" and trip_id is Select.BLANK:
             raise insights.InsightError("Choose a trip for trip-scoped analysis")
-        if research and provider == "local":
+        if research and provider == "local" and not allow_local_research:
             raise insights.InsightError("The local provider does not support web research")
         return str(mode), str(scope), str(provider), None if trip_id is Select.BLANK else str(trip_id), research, goal
 
@@ -1776,6 +1825,7 @@ class InsightsPane(Horizontal):
 
     def _start_single(self, values) -> None:
         self._cancel_event.clear()
+        self._update_control_states(running=True)
         self.query_one("#insights-status", Static).update(
             "Analyzing… Packrat remains usable while the provider responds."
         )
@@ -1784,7 +1834,7 @@ class InsightsPane(Horizontal):
     @on(Button.Pressed, "#insights-council")
     def _council_pressed(self) -> None:
         try:
-            values = self._run_inputs()
+            values = self._run_inputs(allow_local_research=True)
         except insights.InsightError as exc:
             self.app.notify(str(exc), severity="error")
             return
@@ -1804,6 +1854,7 @@ class InsightsPane(Horizontal):
 
     def _start_council(self, values) -> None:
         self._cancel_event.clear()
+        self._update_control_states(running=True)
         self.query_one("#insights-status", Static).update("Council is analyzing in parallel…")
         self._run_provider(values, council=True)
 
@@ -1811,6 +1862,7 @@ class InsightsPane(Horizontal):
     def _cancel_run(self) -> None:
         self._cancel_event.set()
         cancelled = self.workers.cancel_group(self, "insight-run")
+        self._update_control_states()
         if cancelled:
             self.query_one("#insights-status", Static).update("Insight run cancelled")
 
@@ -1869,10 +1921,12 @@ class InsightsPane(Horizontal):
         self.app.call_from_thread(self._show_result, session, result)
 
     def _show_error(self, message: str) -> None:
+        self._update_control_states()
         self.query_one("#insights-status", Static).update(f"Failed: {message}")
         self.app.notify(message, severity="error", timeout=8)
 
     def _show_result(self, session, result) -> None:
+        self._update_control_states()
         self.current_session = session
         self.current_result = result
         markdown = result.get("answer_markdown", "No narrative response.")
@@ -1892,8 +1946,8 @@ class InsightsPane(Horizontal):
             status += f" · usage: {usage}"
         if result.get("proposal_error"):
             status += f" · changes disabled: {result['proposal_error']}"
-        self.query_one("#insights-status", Static).update(status)
         self.refresh_options()
+        self.query_one("#insights-status", Static).update(status)
 
     @on(Button.Pressed, "#insights-new")
     def _new_session(self) -> None:
