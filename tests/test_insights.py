@@ -121,6 +121,22 @@ class PreferenceAndCredentialTests(unittest.TestCase):
         ):
             self.assertEqual(insights.CredentialStore.get("openai"), ("from-env", "environment"))
 
+    def test_enabled_provider_urls_reject_unsafe_or_malformed_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            preference_path = Path(directory) / "preferences.json"
+            for url, message in (
+                ("not-a-url", "http:// or https://"),
+                ("https://user:secret@example.com/v1", "cannot contain credentials"),
+                ("https://example.com/v1?token=secret", "query or fragment"),
+            ):
+                with self.subTest(url=url):
+                    settings = preferences.default_settings()["insights"]
+                    settings["providers"]["local"].update(
+                        {"enabled": True, "model": "test", "base_url": url}
+                    )
+                    with self.assertRaisesRegex(preferences.PreferencesError, message):
+                        preferences.save_insights_settings(settings, preference_path)
+
 
 class ProviderTests(unittest.TestCase):
     def _run(self, provider, response_payload, expected_path, research=False):
@@ -176,6 +192,13 @@ class ProviderTests(unittest.TestCase):
                     "openai", {"model": "x", "base_url": "https://api.openai.com/v1"}, "prompt"
                 )
         self.assertNotIn("never-print-this", str(caught.exception))
+
+    def test_environment_base_url_is_validated_before_a_request(self):
+        with patch.dict(os.environ, {"PACKRAT_LOCAL_BASE_URL": "file:///tmp/provider"}, clear=False):
+            with self.assertRaisesRegex(insights.InsightError, "http:// or https://"):
+                insights.ProviderClient().run(
+                    "local", {"model": "x", "base_url": "http://localhost:11434/v1"}, "prompt"
+                )
 
     def test_openai_compatible_stream_reports_progress(self):
         envelope = json.dumps({"answer_markdown": "Streamed", "findings": [], "proposals": []})
@@ -234,6 +257,31 @@ class ProviderTests(unittest.TestCase):
 
 
 class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_removing_a_provider_key_requires_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "gear_tui.insights.CredentialStore.get", return_value=("stored", "keychain")
+        ), patch("gear_tui.insights.CredentialStore.delete") as delete_key:
+            data_path = Path(directory) / "gear_data.json"
+            gc.save_data(data_path, gc.example_data())
+            app = GearTrackerApp(
+                str(data_path), preferences_path=str(Path(directory) / "preferences.json")
+            )
+            async with app.run_test() as pilot:
+                await pilot.press("4")
+                app.query_one(InsightsPane).query_one("#insights-settings").press()
+                await pilot.pause()
+                settings_screen = app.screen
+                settings_screen.query_one("#settings-remove-key").press()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, ConfirmScreen)
+                await pilot.click("#c-cancel")
+                self.assertFalse(delete_key.called)
+
+                settings_screen.query_one("#settings-remove-key").press()
+                await pilot.pause()
+                await pilot.click("#c-confirm")
+                delete_key.assert_called_once_with("openai")
+
     async def test_provider_test_only_saves_after_a_successful_connection(self):
         class FakeClient:
             should_fail = True

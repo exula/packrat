@@ -17,6 +17,7 @@ import keyring
 from keyring.errors import KeyringError
 
 import gear_core as gc
+import packrat_preferences as preferences
 
 
 SESSION_VERSION = 1
@@ -340,7 +341,11 @@ class CredentialStore:
 
 
 def provider_base_url(provider, configured):
-    return os.environ.get(ENV_URLS[provider], configured).strip().rstrip("/")
+    value = os.environ.get(ENV_URLS[provider], configured)
+    try:
+        return preferences.validate_provider_base_url(value, provider)
+    except preferences.PreferencesError as exc:
+        raise InsightError(str(exc)) from exc
 
 
 def _citations_from(value):

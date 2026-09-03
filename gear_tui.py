@@ -1626,6 +1626,8 @@ class InsightsSettingsScreen(ModalScreen[bool]):
             enabled = self.query_one(f"#settings-{name}-enabled", Checkbox).value
             if enabled and (not model or not base_url):
                 raise ValueError(f"{name.title()} needs a model and base URL")
+            if enabled:
+                base_url = preferences.validate_provider_base_url(base_url, name)
             value["providers"][name] = {"enabled": enabled, "model": model, "base_url": base_url}
         return value
 
@@ -1685,12 +1687,21 @@ class InsightsSettingsScreen(ModalScreen[bool]):
         if select_is_blank(primary):
             self.query_one("#settings-status", Static).update("Choose a primary provider")
             return
-        insights.CredentialStore.delete(str(primary))
-        _, source = insights.CredentialStore.get(str(primary))
-        message = "Stored key removed."
-        if source == "environment":
-            message += " The environment variable is still active."
-        self.query_one("#settings-status", Static).update(message)
+
+        def handled(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            insights.CredentialStore.delete(str(primary))
+            _, source = insights.CredentialStore.get(str(primary))
+            message = "Stored key removed."
+            if source == "environment":
+                message += " The environment variable is still active."
+            self.query_one("#settings-status", Static).update(message)
+
+        self.app.push_screen(
+            ConfirmScreen(f"Remove the stored {str(primary).title()} API key?", danger=True),
+            handled,
+        )
 
     @work(thread=True, exclusive=True, group="provider-test")
     def _test_primary(self, value, api_key) -> None:

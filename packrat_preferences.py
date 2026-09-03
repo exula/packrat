@@ -5,6 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Optional, Union
+from urllib.parse import urlsplit
 
 from platformdirs import user_config_path, user_data_path
 
@@ -48,6 +49,23 @@ DEFAULT_INSIGHTS_SETTINGS = {
 }
 
 
+def validate_provider_base_url(value: str, provider: str = "provider") -> str:
+    """Return a safe normalized HTTP(S) provider URL or raise a user-facing error."""
+    normalized = value.strip().rstrip("/")
+    try:
+        parsed = urlsplit(normalized)
+        parsed.port
+    except ValueError as exc:
+        raise PreferencesError(f"{provider.title()} base URL is invalid") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise PreferencesError(f"{provider.title()} base URL must use http:// or https://")
+    if parsed.username is not None or parsed.password is not None:
+        raise PreferencesError(f"{provider.title()} base URL cannot contain credentials")
+    if parsed.query or parsed.fragment:
+        raise PreferencesError(f"{provider.title()} base URL cannot contain a query or fragment")
+    return normalized
+
+
 def default_settings():
     return {
         "version": PREFERENCES_VERSION,
@@ -80,10 +98,13 @@ def _validate_insights(value):
             raise PreferencesError(f"preferences provider {name}.enabled must be boolean")
         if not isinstance(model, str) or not isinstance(base_url, str):
             raise PreferencesError(f"preferences provider {name} text values must be strings")
+        normalized_url = base_url.strip().rstrip("/")
+        if enabled:
+            normalized_url = validate_provider_base_url(normalized_url, name)
         result["providers"][name] = {
             "enabled": enabled,
             "model": model.strip(),
-            "base_url": base_url.strip().rstrip("/"),
+            "base_url": normalized_url,
         }
     return result
 
