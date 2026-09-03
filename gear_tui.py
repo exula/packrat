@@ -875,6 +875,7 @@ class ShortcutHelpScreen(ModalScreen[None]):
 
 [b]Anywhere[/b]       1 / 2 / 3 / 4  Switch tabs  /  Search     ?  This help
                  Ctrl+B  Backup   Ctrl+L  Reload library   Ctrl+P  Preferences   Q  Quit
+                 Ctrl+Shift+B  Restore latest backup
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
 [b]Gear variants[/b]  D  Duplicate selected gear
@@ -2476,6 +2477,7 @@ class GearTrackerApp(App):
         Binding("slash", "search", "Search"),
         Binding("question_mark", "show_help", "Help"),
         Binding("ctrl+b", "backup", "Backup"),
+        Binding("ctrl+shift+b", "restore_backup", "Restore", show=False),
         Binding("ctrl+l", "reload_library", "Reload"),
         Binding("ctrl+p", "preferences", "Preferences", priority=True),
         Binding("q", "quit", "Quit"),
@@ -2589,6 +2591,46 @@ class GearTrackerApp(App):
             self.notify(f"Backup failed: {exc}", severity="error", timeout=5)
             return
         self.notify(f"Wrote {path}", title="Backup complete", timeout=4)
+
+    def action_restore_backup(self) -> None:
+        if isinstance(self.screen, (ModalScreen, TripComparisonScreen)):
+            self.notify("Close the current dialog or comparison before restoring", severity="warning")
+            return
+        backup_path = self.data_path + ".bak"
+        if not os.path.exists(backup_path):
+            self.notify("No backup exists for the current library yet", severity="warning")
+            return
+
+        def handled(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            try:
+                restored, signature, recovery_path = gc.restore_backup(
+                    self.data_path, expected_signature=self._data_signature
+                )
+            except (OSError, gc.DataValidationError) as exc:
+                self.notify(f"Restore failed; current data was kept: {exc}", severity="error", timeout=7)
+                return
+            self.data = restored
+            self._data_signature = signature
+            self._last_saved_data = copy.deepcopy(restored)
+            if isinstance(self.screen, TripDashboardScreen):
+                self.screen.refresh_dashboard()
+            else:
+                self._refresh_tab(self.query_one(TabbedContent).active)
+            self.notify(
+                f"Backup restored. The replaced library is preserved at {recovery_path}",
+                title="Restore complete",
+                timeout=7,
+            )
+
+        self.push_screen(
+            ConfirmScreen(
+                "Restore the latest backup? The current library will be preserved separately first.",
+                danger=True,
+            ),
+            handled,
+        )
 
     def action_reload_library(self) -> None:
         if isinstance(self.screen, (ModalScreen, TripComparisonScreen)):

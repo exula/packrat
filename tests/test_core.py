@@ -90,6 +90,35 @@ class PersistenceTests(unittest.TestCase):
             os.path.abspath(os.path.join("somewhere", "portable", "exports")),
         )
 
+    def test_restore_validates_backup_and_preserves_replaced_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            original = gc.example_data()
+            gc.save_data(path, original)
+            changed = copy.deepcopy(original)
+            changed["gear"][0]["name"] = "Current version"
+            signature = gc.save_data(path, changed)
+
+            restored, restored_signature, recovery_path = gc.restore_backup(
+                path, expected_signature=signature
+            )
+            self.assertEqual(restored["gear"][0]["name"], original["gear"][0]["name"])
+            self.assertEqual(gc.load_data(path), original)
+            self.assertEqual(gc.load_data(recovery_path), changed)
+            self.assertEqual(restored_signature, gc.file_signature(path))
+
+            path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+            externally_changed = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(gc.DataConflictError, r"Ctrl\+L"):
+                gc.restore_backup(path, expected_signature=restored_signature)
+            self.assertEqual(path.read_text(encoding="utf-8"), externally_changed)
+
+            Path(f"{path}.bak").write_text("{invalid", encoding="utf-8")
+            current_content = path.read_text(encoding="utf-8")
+            with self.assertRaises(gc.DataValidationError):
+                gc.restore_backup(path, expected_signature=restored_signature)
+            self.assertEqual(path.read_text(encoding="utf-8"), current_content)
+
 
 class SummaryTests(unittest.TestCase):
     def test_weight_formatter_converts_and_signs_all_units(self):

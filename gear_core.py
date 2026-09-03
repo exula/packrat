@@ -324,6 +324,27 @@ def backup_data(path):
     return backup_path
 
 
+def restore_backup(path, expected_signature=None):
+    """Restore ``path.bak`` after validation and preserve the current file."""
+    path = os.fspath(path)
+    backup_path = path + ".bak"
+    if not os.path.exists(backup_path):
+        raise FileNotFoundError(backup_path)
+    restored = load_data(backup_path)
+    current_signature = file_signature(path)
+    if expected_signature is not None and current_signature != expected_signature:
+        raise DataConflictError(
+            "the data file changed on disk; press Ctrl+L before restoring its backup"
+        )
+    recovery_path = path + ".before-restore.bak"
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as current_file:
+            _atomic_write(recovery_path, current_file.read())
+    content = json.dumps(restored, indent=2, ensure_ascii=False) + "\n"
+    _atomic_write(path, content)
+    return restored, file_signature(path), recovery_path
+
+
 def export_dir_for_data(data_path):
     """Keep exports with the selected portable data file."""
     return os.path.join(os.path.dirname(os.path.abspath(os.fspath(data_path))), "exports")

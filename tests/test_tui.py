@@ -7,6 +7,7 @@ from pathlib import Path
 from textual.widgets import Button, Input, Label, Static, TabbedContent
 
 from gear_tui import (
+    ConfirmScreen,
     GearFormScreen,
     GearTrackerApp,
     PackAuditScreen,
@@ -75,6 +76,26 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("ctrl+l")
                 self.assertEqual(app.data, valid_data)
                 self.assertEqual(app._data_signature, valid_signature)
+
+    async def test_restore_backup_confirms_and_preserves_current_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            app = GearTrackerApp(str(path))
+            original_name = app.data["gear"][0]["name"]
+            app.data["gear"][0]["name"] = "Current unsatisfactory edit"
+            self.assertTrue(app.save())
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.press("ctrl+shift+b")
+                self.assertIsInstance(app.screen, ConfirmScreen)
+                await pilot.click("#c-confirm")
+                await pilot.pause()
+                self.assertEqual(app.data["gear"][0]["name"], original_name)
+                recovery = Path(f"{path}.before-restore.bak")
+                self.assertTrue(recovery.exists())
+                self.assertEqual(
+                    gc.load_data(recovery)["gear"][0]["name"],
+                    "Current unsatisfactory edit",
+                )
 
     async def test_gear_hotkey_and_ctrl_s_add_an_item(self):
         with tempfile.TemporaryDirectory() as directory:

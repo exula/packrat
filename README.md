@@ -164,7 +164,10 @@ changes the remembered folder by itself.
 ## Backing it up
 
 Press **Ctrl+B** for an on-demand snapshot, copy the JSON file whenever you
-want a dated archive, or use iCloud/Dropbox/OneDrive version history.
+want a dated archive, or use iCloud/Dropbox/OneDrive version history. Press
+**Ctrl+Shift+B** to restore the latest `.bak` after explicit confirmation.
+Packrat validates that snapshot first and preserves the replaced library as
+`gear_data.json.before-restore.bak`, providing another recovery point.
 
 ## Development
 
