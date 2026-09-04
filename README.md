@@ -23,7 +23,8 @@ uv run python main.py
 
 The first launch opens a short setup screen. Accept the suggested
 platform-specific folder or enter another folder; Packrat creates
-`gear_data.json` there with clearly labeled example items.
+`gear_data.json` there. It includes clearly labeled example items by default
+for a quick tour, or you can uncheck that option to start with a blank library.
 
 Without `uv`:
 
@@ -58,22 +59,27 @@ Everything is click-driven, with keyboard equivalents for everything. Press
 `?` in the app for the complete shortcut overlay. The most useful shortcuts
 are:
 
-- **1 / 2 / 3** switches between Gear, Trips, and Reports.
+- **1 / 2 / 3 / 4** switches between Gear, Trips, Reports, and Insights.
 - **/** focuses the search box; **Esc** clears search and returns to the table.
-- **A** adds, **E** edits, **Delete** deletes/removes, and **R** toggles review
+- **A** adds, **E** edits, **D** duplicates, **Delete** deletes/removes, and **R** toggles review
   candidates when the relevant table is focused.
 - In Trips, **D** duplicates and **C** compares. In a trip dashboard, **I**
   edits an item's quantity/note and **P** opens the pack audit.
 - **Ctrl+S** saves forms and picker dialogs; **Enter** confirms confirmations.
 - **Ctrl+B** writes a manual `.bak` snapshot beside your data file.
+- **Ctrl+L** reloads the current library after a sync client or another Packrat
+  process changes it on disk.
 - **Ctrl+P** opens Storage Preferences to open another library or copy the
   current library to a new folder and switch to it.
+- **Ctrl+Z / Ctrl+Y** undo and redo up to 25 successfully saved library
+  changes. History is cleared when you reload, restore, or switch libraries.
 
 - **Click a table row** to select it; **click it again** (or press Enter)
   to open/edit it. This two-step click mirrors how most file browsers work
   — a highlight first, then an activation — so you never open the wrong
   item by accident.
-- **Gear Inventory tab** — search, add, edit, delete gear. The "Review
+- **Gear Inventory tab** — search, add, edit, duplicate, and delete gear. Duplication
+  creates an independent copy for quickly recording a similar item or variant. The "Review
   Candidates" button filters to items rated low usefulness (<3/5) *and*
   over 8 oz — good first candidates to cut. Enter each item's per-unit weight
   in ounces; Packrat immediately previews and displays the equivalent ounces,
@@ -98,7 +104,42 @@ are:
   to a polished Markdown file (weight summary, category breakdown with a
   bar chart, heaviest items, review candidates, and a checkbox pack list)
   written to `exports/`.
+- **Insights tab** — use ChatGPT/OpenAI, Claude, Gemini, or an
+  OpenAI-compatible local server for a Shakedown, Trip Coach, Swap Lab,
+  cited Gear Research, or an open-ended question. Packrat sends a previewable
+  snapshot of the selected inventory or trip, saves conversations in the
+  library's `insights/` folder, and treats model changes as drafts that must be
+  checked before they are validated and saved locally. Council mode compares
+  every configured provider and asks the primary provider to reconcile them.
 - **Esc** cancels any dialog. **q** quits from the main screen.
+
+## AI provider setup
+
+Open **Insights → Providers** and enable one or more providers. Packrat starts
+cloud providers with a practical default model; choose **Choose Model** to
+fetch compatible models available to your account, search the list, and select
+one without memorizing an ID. Model IDs remain editable for custom endpoints.
+**Test Primary & Save** verifies the selected provider before committing the
+settings; a failed test leaves the prior configuration unchanged. Keys entered
+in Packrat are stored in the
+operating system keychain, never in `preferences.json`, `gear_data.json`, or
+saved insight sessions. Environment variables take precedence:
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GEMINI_API_KEY`
+- `PACKRAT_LOCAL_API_KEY` (optional)
+
+Provider URLs may be overridden in the dialog or with `OPENAI_BASE_URL`,
+`ANTHROPIC_BASE_URL`, `GEMINI_BASE_URL`, and `PACKRAT_LOCAL_BASE_URL`. The local
+provider uses the OpenAI-compatible Chat Completions protocol and defaults to
+Ollama at `http://localhost:11434/v1`. Web research is available only for the
+three cloud providers and may incur separate provider charges.
+
+The reusable Pack Profile is portable with the library and is included in AI
+requests. Saved sessions contain the context snapshot, prompts, answers,
+citations, proposals, and usage metadata. Use the saved-session controls in
+Insights to load, export, or permanently delete a conversation.
 
 ## Data safety
 
@@ -109,16 +150,19 @@ client changed the file after it was opened; if so, it refuses to overwrite
 that newer copy and rolls the in-memory edit back.
 
 It is still a flat JSON file rather than a mergeable database. If Packrat
-reports an external-change conflict, restart it to load the newer file before
-editing again.
+reports an external-change conflict, press **Ctrl+L** to load the newer file
+before editing again. If the newer file is malformed or missing, Packrat keeps
+the last valid in-memory library and explains the problem instead of replacing it.
 
 ## Storage preferences
 
 The setup screen and Storage Preferences select a folder; the library inside
 that folder is always named `gear_data.json`. **Open / Create** opens an
-existing valid library or creates a new example library. **Copy Current &
-Switch** copies the active library to an unused destination and leaves the
-original file intact. It will not overwrite an existing destination library.
+existing valid library or creates a new one; choose whether a newly created
+library should include examples. The choice never changes an existing library.
+**Copy Current & Switch** copies the active library to an unused destination
+and leaves the original file intact. It will not overwrite an existing
+destination library.
 
 If the saved preference is damaged or its library cannot be opened, Packrat
 returns to setup with the error instead of silently using another data file.
@@ -128,7 +172,10 @@ changes the remembered folder by itself.
 ## Backing it up
 
 Press **Ctrl+B** for an on-demand snapshot, copy the JSON file whenever you
-want a dated archive, or use iCloud/Dropbox/OneDrive version history.
+want a dated archive, or use iCloud/Dropbox/OneDrive version history. Press
+**Ctrl+Shift+B** to restore the latest `.bak` after explicit confirmation.
+Packrat validates that snapshot first and preserves the replaced library as
+`gear_data.json.before-restore.bak`, providing another recovery point.
 
 ## Development
 
@@ -139,7 +186,8 @@ uv run python -m unittest discover -s tests -v
 ```
 
 The suite covers JSON migration and validation, persistence, trip-specific
-weight calculations, duplication, comparisons, pack-audit logic, Markdown
-exports, and headless keyboard workflows.
+weight calculations, duplication, comparisons, pack-audit logic, AI provider
+normalization and proposal safety, Markdown exports, and headless keyboard
+workflows.
 
 The same suite runs on Python 3.9 and 3.12 for every pull request.

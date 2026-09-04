@@ -4,12 +4,15 @@ version = "0.1.0"
 description = "A portable terminal app for backpacking gear and trip pack lists"
 requires-python = ">=3.9"
 dependencies = [
+    "httpx>=0.28,<1",
+    "keyring>=25.7,<26",
     "platformdirs>=4.0.0",
     "textual>=0.60.0",
 ]
 
 [dependency-groups]
 dev = [
+    "pytest>=8,<10",
     "textual-dev>=1.8.0",
 ]
 

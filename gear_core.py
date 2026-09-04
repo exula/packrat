@@ -33,8 +33,17 @@ BIG_THREE = {"Shelter", "Sleep System", "Pack"}
 REVIEW_WEIGHT_THRESHOLD_OZ = 8.0
 REVIEW_USEFULNESS_THRESHOLD = 3
 AUDIT_STATUSES = ("covered", "omitted", "unresolved")
-DATA_VERSION = 2
+DATA_VERSION = 3
 GRAMS_PER_OUNCE = 28.349523125
+
+INSIGHTS_PROFILE_DEFAULTS = {
+    "experience_level": "",
+    "priorities": "",
+    "typical_conditions": "",
+    "budget_notes": "",
+    "constraints": "",
+    "additional_context": "",
+}
 
 class DataValidationError(ValueError):
     """Raised when a data file doesn't match Packrat's expected schema."""
@@ -51,6 +60,7 @@ class DataConflictError(OSError):
 def blank_data():
     return {
         "meta": {"created": date.today().isoformat(), "version": DATA_VERSION},
+        "insights_profile": copy.deepcopy(INSIGHTS_PROFILE_DEFAULTS),
         "gear": [],
         "trips": [],
     }
@@ -136,6 +146,14 @@ def validate_data(data):
     for collection in ("gear", "trips"):
         if not isinstance(data.setdefault(collection, []), list):
             raise DataValidationError(f"{collection} must be a list")
+
+    profile = data.setdefault("insights_profile", copy.deepcopy(INSIGHTS_PROFILE_DEFAULTS))
+    if not isinstance(profile, dict):
+        raise DataValidationError("insights_profile must be an object")
+    for field, default in INSIGHTS_PROFILE_DEFAULTS.items():
+        profile.setdefault(field, default)
+        if not isinstance(profile[field], str):
+            raise DataValidationError(f"insights_profile.{field} must be a string")
 
     gear_ids = set()
     for index, gear in enumerate(data["gear"]):
@@ -276,7 +294,7 @@ def save_data(path, data, expected_signature=None):
     validate_data(data)
     if expected_signature is not None and file_signature(path) != expected_signature:
         raise DataConflictError(
-            "the data file changed on disk; restart Packrat to load the newer copy"
+            "the data file changed on disk; press Ctrl+L to load the newer copy"
         )
     content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     if os.path.exists(path):
@@ -304,6 +322,27 @@ def backup_data(path):
             pass
         raise
     return backup_path
+
+
+def restore_backup(path, expected_signature=None):
+    """Restore ``path.bak`` after validation and preserve the current file."""
+    path = os.fspath(path)
+    backup_path = path + ".bak"
+    if not os.path.exists(backup_path):
+        raise FileNotFoundError(backup_path)
+    restored = load_data(backup_path)
+    current_signature = file_signature(path)
+    if expected_signature is not None and current_signature != expected_signature:
+        raise DataConflictError(
+            "the data file changed on disk; press Ctrl+L before restoring its backup"
+        )
+    recovery_path = path + ".before-restore.bak"
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as current_file:
+            _atomic_write(recovery_path, current_file.read())
+    content = json.dumps(restored, indent=2, ensure_ascii=False) + "\n"
+    _atomic_write(path, content)
+    return restored, file_signature(path), recovery_path
 
 
 def export_dir_for_data(data_path):
@@ -373,6 +412,15 @@ def is_review_flagged(item):
 
 def trips_referencing_gear(data, gear_id):
     return [t for t in data["trips"] if any(i["gear_id"] == gear_id for i in t["items"])]
+
+
+def duplicate_gear(data, gear, name=None):
+    """Return an independent gear copy with a fresh identity."""
+    duplicate = copy.deepcopy(gear)
+    duplicate["id"] = next_id(data["gear"], "G")
+    duplicate["name"] = name or f"{gear['name']} (Copy)"
+    duplicate["added"] = date.today().isoformat()
+    return duplicate
 
 
 def duplicate_trip(data, trip, name=None):
@@ -482,11 +530,12 @@ def compute_trip_summary(data, trip):
             consumable_oz += oz
         if gear["category"] in category_oz:
             category_oz[gear["category"]] += oz
-        total_cost += gear.get("cost", 0.0) or 0.0
+        trip_qty = entry.get("qty", gear.get("qty", 1))
+        total_cost += (gear.get("cost", 0.0) or 0.0) * trip_qty
         rows.append({
             "gear": gear,
             "trip_note": entry.get("note", ""),
-            "trip_qty": entry.get("qty", gear.get("qty", 1)),
+            "trip_qty": trip_qty,
             "total_oz": oz,
             "review_flag": is_review_flagged(gear),
         })
@@ -497,7 +546,7 @@ def compute_trip_summary(data, trip):
     total_oz_all = base_oz + worn_oz + consumable_oz
     total_lb = total_oz_all / 16
     target_lb = trip.get("target_base_weight_lb")
-    delta_lb = (base_lb - target_lb) if target_lb else None
+    delta_lb = (base_lb - target_lb) if target_lb is not None else None
 
     big_three_oz = sum(oz for cat, oz in category_oz.items() if cat in BIG_THREE)
 
@@ -553,7 +602,7 @@ def render_trip_markdown(data, trip):
     if s["unit_count"] != s["item_count"]:
         item_label += f" / {s['unit_count']} total units"
     meta_bits.append(item_label)
-    if s["target_lb"]:
+    if s["target_lb"] is not None:
         meta_bits.append(f"target base **{format_weight_oz(s['target_lb'] * 16)}**")
     add(" · ".join(meta_bits))
     add("")
@@ -682,7 +731,7 @@ def render_inventory_markdown(data):
     add = L.append
     gear = data["gear"]
     total_oz_all = sum(total_weight_oz(g) for g in gear)
-    total_cost_all = sum(g.get("cost", 0.0) or 0.0 for g in gear)
+    total_cost_all = sum((g.get("cost", 0.0) or 0.0) * g["qty"] for g in gear)
 
     add("# 🎒 Gear Inventory")
     add("")
@@ -729,7 +778,7 @@ def render_inventory_markdown(data):
         emoji = CATEGORY_EMOJI.get(cat, "")
         add(f"### {emoji} {cat} — {format_weight_oz(cat_oz)}")
         add("")
-        add("| Item | Brand | Weight | Type | Qty | Useful. | Cost | |")
+        add("| Item | Brand | Weight | Type | Qty | Useful. | Cost / unit | |")
         add("|---|---|---:|---|---:|---:|---:|---|")
         for g in sorted(by_cat[cat], key=lambda x: -total_weight_oz(x)):
             flag = "⚠️" if is_review_flagged(g) else ""

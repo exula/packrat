@@ -1,2 +1,4 @@
 platformdirs>=4.0.0
 textual>=0.60.0
+httpx>=0.28,<1
+keyring>=25.7,<26

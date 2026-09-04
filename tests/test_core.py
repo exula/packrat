@@ -80,7 +80,7 @@ class PersistenceTests(unittest.TestCase):
             self.assertFalse(any(p.suffix == ".tmp" for p in Path(directory).iterdir()))
 
             path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
-            with self.assertRaises(gc.DataConflictError):
+            with self.assertRaisesRegex(gc.DataConflictError, r"Ctrl\+L"):
                 gc.save_data(path, changed, expected_signature=second_signature)
 
     def test_exports_follow_custom_data_path(self):
@@ -89,6 +89,35 @@ class PersistenceTests(unittest.TestCase):
             gc.export_dir_for_data(path),
             os.path.abspath(os.path.join("somewhere", "portable", "exports")),
         )
+
+    def test_restore_validates_backup_and_preserves_replaced_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            original = gc.example_data()
+            gc.save_data(path, original)
+            changed = copy.deepcopy(original)
+            changed["gear"][0]["name"] = "Current version"
+            signature = gc.save_data(path, changed)
+
+            restored, restored_signature, recovery_path = gc.restore_backup(
+                path, expected_signature=signature
+            )
+            self.assertEqual(restored["gear"][0]["name"], original["gear"][0]["name"])
+            self.assertEqual(gc.load_data(path), original)
+            self.assertEqual(gc.load_data(recovery_path), changed)
+            self.assertEqual(restored_signature, gc.file_signature(path))
+
+            path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+            externally_changed = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(gc.DataConflictError, r"Ctrl\+L"):
+                gc.restore_backup(path, expected_signature=restored_signature)
+            self.assertEqual(path.read_text(encoding="utf-8"), externally_changed)
+
+            Path(f"{path}.bak").write_text("{invalid", encoding="utf-8")
+            current_content = path.read_text(encoding="utf-8")
+            with self.assertRaises(gc.DataValidationError):
+                gc.restore_backup(path, expected_signature=restored_signature)
+            self.assertEqual(path.read_text(encoding="utf-8"), current_content)
 
 
 class SummaryTests(unittest.TestCase):
@@ -116,7 +145,26 @@ class SummaryTests(unittest.TestCase):
         row = next(row for row in summary["rows"] if row["gear"]["id"] == gear["id"])
         self.assertEqual(row["trip_qty"], 2)
         self.assertEqual(row["total_oz"], 5.2)
+        self.assertEqual(summary["total_cost"], 450 + 550 + (45 * 2) + 25 + 170)
         self.assertIn("×2", gc.render_trip_markdown(data, data["trips"][0]))
+
+    def test_zero_target_is_distinct_from_no_target(self):
+        data = gc.example_data()
+        trip = data["trips"][0]
+        trip["target_base_weight_lb"] = 0.0
+        summary = gc.compute_trip_summary(data, trip)
+        self.assertEqual(summary["delta_lb"], summary["base_lb"])
+        export = gc.render_trip_markdown(data, trip)
+        self.assertIn("0.0 oz · 0.00 lb · 0.0 g", export)
+        self.assertIn("over", export.lower())
+
+    def test_inventory_value_uses_inventory_quantity(self):
+        data = gc.example_data()
+        data["gear"][0]["qty"] = 2
+        export = gc.render_inventory_markdown(data)
+        expected = sum(item["cost"] * item["qty"] for item in data["gear"])
+        self.assertIn(f"${expected:,.2f} total value", export)
+        self.assertIn("Cost / unit", export)
 
     def test_review_candidates_remain_in_export_with_pack_audit(self):
         data = gc.example_data()
@@ -153,6 +201,14 @@ class PlanningWorkflowTests(unittest.TestCase):
         duplicate["audit"]["Water"] = "omitted"
         self.assertEqual(self.trip["items"][0]["qty"], 1)
         self.assertNotIn("Water", self.trip["audit"])
+
+    def test_duplicate_gear_is_independent_and_gets_next_id(self):
+        source = self.data["gear"][0]
+        duplicate = gc.duplicate_gear(self.data, source)
+        self.assertEqual(duplicate["id"], "G007")
+        self.assertEqual(duplicate["name"], f"{source['name']} (Copy)")
+        duplicate["notes"] = "changed"
+        self.assertNotEqual(source["notes"], duplicate["notes"])
 
     def test_compare_trips_reports_membership_quantity_and_weight_deltas(self):
         duplicate = gc.duplicate_trip(self.data, self.trip, "Alternative")

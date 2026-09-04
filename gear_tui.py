@@ -12,14 +12,16 @@ Requires: pip install textual platformdirs (see requirements.txt)
 
 import argparse
 import copy
+import json
 import math
 import os
 import tempfile
+import threading
 from datetime import date
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 from rich.text import Text
-from textual import on
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -27,18 +29,22 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
     Input,
     Label,
+    Markdown,
     Select,
     Static,
     TabbedContent,
     TabPane,
+    TextArea,
 )
 
 import gear_core as gc
+import gear_insights as insights
 import packrat_preferences as preferences
 
 # ---------------------------------------------------------------------------
@@ -149,7 +155,8 @@ ModalScreen {
     padding: 2 3;
     width: 90%;
     max-width: 76;
-    height: auto;
+    height: 90%;
+    overflow-y: hidden;
 }
 
 #setup-dialog Label, #preferences-dialog Label {
@@ -168,7 +175,86 @@ ModalScreen {
     padding: 1 2;
     width: 90%;
     max-width: 76;
+    height: 90%;
+    overflow-y: hidden;
+}
+
+#insights-settings-dialog, #insights-profile-dialog, #proposal-dialog {
+    background: #182015;
+    border: thick #4A7856;
+    padding: 1 2;
+    width: 95%;
+    max-width: 92;
+    height: 90%;
+    overflow-y: hidden;
+}
+
+.dialog-scroll, .insights-form-scroll {
+    height: 1fr;
+    padding-right: 1;
+}
+
+#insights-layout {
+    height: 1fr;
+}
+
+#insights-controls {
+    width: 38;
+    padding: 1;
+    border-right: solid #3A4A32;
+}
+
+#insights-controls .toolbar {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+#insights-controls .toolbar Button {
+    min-width: 9;
+    margin-right: 0;
+}
+
+#insights-controls Select, #insights-controls Input, #insights-controls TextArea {
+    width: 100%;
+    margin-bottom: 1;
+}
+
+#insights-goal {
+    height: 6;
+}
+
+#insights-result {
+    height: 1fr;
+    padding: 1 2;
+}
+
+.provider-row {
     height: auto;
+    padding-bottom: 1;
+}
+
+.provider-row Checkbox {
+    width: 14;
+}
+
+.provider-row Input {
+    width: 1fr;
+    margin-left: 1;
+}
+
+.provider-row Button {
+    min-width: 14;
+    margin-left: 1;
+}
+
+.profile-field {
+    height: 4;
+    margin-bottom: 1;
+}
+
+#insights-status, #settings-status {
+    color: #C7D7BC;
+    padding: 1;
 }
 
 .picker-dialog {
@@ -203,6 +289,11 @@ ModalScreen {
 }
 
 #dialog.gear-form-dialog {
+    height: 90%;
+    overflow-y: hidden;
+}
+
+#dialog.trip-form-dialog, #dialog.trip-item-form-dialog {
     height: 90%;
     overflow-y: hidden;
 }
@@ -264,6 +355,12 @@ def colored_bar(percent: float, width: int = 20) -> Text:
     text.append("█" * filled, style="#6EE7B7")
     text.append("░" * (width - filled), style="#3A4A32")
     return text
+
+
+def select_is_blank(value: object) -> bool:
+    """Handle empty Select values across supported Textual releases."""
+    null_value = getattr(Select, "NULL", Select.BLANK)
+    return value is None or value is null_value or value is Select.BLANK
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +441,7 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
                         yield Select([(str(i), i) for i in range(1, 6)], id="f-usefulness", allow_blank=False,
                                      value=self.initial.get("usefulness", 3))
                     with Vertical(classes="field-col"):
-                        yield Label("Cost ($)")
+                        yield Label("Cost per unit ($)")
                         yield Input(value=str(self.initial.get("cost", 0)), id="f-cost", type="number")
                 yield Label("Notes")
                 yield Input(value=self.initial.get("notes", ""), id="f-notes")
@@ -395,6 +492,9 @@ class GearFormScreen(ModalScreen[Optional[dict]]):
         except ValueError:
             self.app.notify("Weight, quantity, and cost must be numbers", severity="error")
             return
+        if not math.isfinite(weight) or not math.isfinite(cost):
+            self.app.notify("Weight and cost must be finite numbers", severity="error")
+            return
         if weight < 0 or cost < 0 or qty < 1:
             self.app.notify("Weight/cost cannot be negative and quantity must be at least 1", severity="error")
             return
@@ -428,16 +528,18 @@ class TripFormScreen(ModalScreen[Optional[dict]]):
 
     def compose(self) -> ComposeResult:
         title = "Add Trip" if self.mode == "add" else f"Edit: {self.initial.get('name','')}"
-        with Vertical(id="dialog", classes="form-dialog"):
+        with Vertical(id="dialog", classes="form-dialog trip-form-dialog"):
             yield Label(title, classes="dialog-title")
-            yield Label("Trip Name")
-            yield Input(value=self.initial.get("name", ""), id="t-name", placeholder="e.g. VA Triple Crown")
-            yield Label("Dates / Season")
-            yield Input(value=self.initial.get("dates", ""), id="t-dates", placeholder="e.g. Late October")
-            yield Label("Target Base Weight (lb)")
-            yield Input(value=str(self.initial.get("target_base_weight_lb") or ""), id="t-target", type="number")
-            yield Label("Notes")
-            yield Input(value=self.initial.get("notes", ""), id="t-notes")
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Label("Trip Name")
+                yield Input(value=self.initial.get("name", ""), id="t-name", placeholder="e.g. VA Triple Crown")
+                yield Label("Dates / Season")
+                yield Input(value=self.initial.get("dates", ""), id="t-dates", placeholder="e.g. Late October")
+                yield Label("Target Base Weight (lb)")
+                target = self.initial.get("target_base_weight_lb")
+                yield Input(value="" if target is None else str(target), id="t-target", type="number")
+                yield Label("Notes")
+                yield Input(value=self.initial.get("notes", ""), id="t-notes")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="t-cancel")
                 yield Button("Save", id="t-save", variant="success")
@@ -466,6 +568,9 @@ class TripFormScreen(ModalScreen[Optional[dict]]):
             target = float(target_raw) if target_raw else None
         except ValueError:
             self.app.notify("Target base weight must be a number", severity="error")
+            return
+        if target is not None and not math.isfinite(target):
+            self.app.notify("Target base weight must be a finite number", severity="error")
             return
         if target is not None and target < 0:
             self.app.notify("Target base weight cannot be negative", severity="error")
@@ -584,14 +689,15 @@ class TripItemFormScreen(ModalScreen[Optional[dict]]):
         self.entry = entry
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="dialog", classes="form-dialog"):
+        with Vertical(id="dialog", classes="form-dialog trip-item-form-dialog"):
             yield Label(f"Edit trip item: {self.gear['name']}", classes="dialog-title")
-            yield Label(f"Inventory weight per unit: {gc.format_weight_oz(self.gear['weight_oz'])}")
-            yield Label("Trip quantity")
-            yield Input(value=str(self.entry.get("qty", self.gear.get("qty", 1))),
-                        id="ti-qty", type="integer")
-            yield Label("Trip-specific note")
-            yield Input(value=self.entry.get("note", ""), id="ti-note")
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Label(f"Inventory weight per unit: {gc.format_weight_oz(self.gear['weight_oz'])}")
+                yield Label("Trip quantity")
+                yield Input(value=str(self.entry.get("qty", self.gear.get("qty", 1))),
+                            id="ti-qty", type="integer")
+                yield Label("Trip-specific note")
+                yield Input(value=self.entry.get("note", ""), id="ti-note")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="ti-cancel")
                 yield Button("Save", id="ti-save", variant="success")
@@ -734,7 +840,7 @@ class TripComparisonScreen(Screen):
 
     @on(Select.Changed, "#compare-trip")
     def _selection_changed(self, event: Select.Changed) -> None:
-        if event.value != Select.BLANK:
+        if not select_is_blank(event.value):
             self._refresh(str(event.value))
 
     def _refresh(self, right_trip_id: str) -> None:
@@ -786,13 +892,16 @@ class ShortcutHelpScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         help_text = """[b]Keyboard shortcuts[/b]
 
-[b]Anywhere[/b]       1 / 2 / 3  Switch tabs     /  Search     ?  This help
-                 Ctrl+B  Backup data   Ctrl+P  Preferences   Q  Quit
+[b]Anywhere[/b]       1 / 2 / 3 / 4  Switch tabs  /  Search     ?  This help
+                 Ctrl+B  Backup   Ctrl+L  Reload library   Ctrl+P  Preferences   Q  Quit
+                 Ctrl+Z  Undo saved change   Ctrl+Y  Redo   Ctrl+Shift+B  Restore latest backup
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
+[b]Gear variants[/b]  D  Duplicate selected gear
 [b]Trips[/b]          A  Add      Enter  Open  D  Duplicate  C  Compare  Delete  Delete
 [b]Trip dashboard[/b] A  Add item I  Edit qty/note E  Edit trip P  Pack audit
                  Delete  Remove     X  Export
+[b]Insights[/b]       Run one provider or Council; review every proposed change
 [b]Dialogs[/b]        Ctrl+S  Save/add          Esc  Cancel
 [b]Confirmations[/b]  Enter  Confirm            Esc  Cancel
 
@@ -838,8 +947,11 @@ class TripDashboardScreen(Screen):
             yield Static(id="dash-summary", classes="panel")
             yield Static("Category Breakdown", classes="section-title")
             yield DataTable(id="dash-cat-table", zebra_stripes=True, cursor_type="none")
-            yield Static("Assigned Gear — select a row, then Remove to take it off this trip",
-                         classes="section-title")
+            yield Static(
+                "Assigned Gear — select a row, then Remove to take it off this trip",
+                id="dash-items-heading",
+                classes="section-title",
+            )
             yield DataTable(id="dash-items-table", cursor_type="row", zebra_stripes=True)
             with Horizontal(classes="toolbar"):
                 yield Button("+ Add Item", id="dash-add-item", variant="success")
@@ -875,7 +987,7 @@ class TripDashboardScreen(Screen):
             f"Consumable {gc.format_weight_oz(s['consumable_oz'])}\n"
             f"Total [b]{gc.format_weight_oz(s['total_oz'])}[/b] skin-out"
         ]
-        if s["target_lb"]:
+        if s["target_lb"] is not None:
             if s["delta_lb"] <= 0:
                 lines.append(f"[#7CD992]{gc.format_weight_oz(abs(s['delta_lb']) * 16)} under target "
                              f"({gc.format_weight_oz(s['target_lb'] * 16)})[/#7CD992]")
@@ -913,6 +1025,21 @@ class TripDashboardScreen(Screen):
             items_table.add_row(g["id"], g["category"], g["name"], str(row["trip_qty"]),
                                 gc.format_weight_oz(row["total_oz"]),
                                 flag, row["trip_note"], key=g["id"])
+        has_items = items_table.row_count > 0
+        assigned_ids = {item["gear_id"] for item in trip["items"]}
+        has_available_gear = any(gear["id"] not in assigned_ids for gear in app.data["gear"])
+        if not app.data["gear"]:
+            items_heading = "No inventory gear yet — go back to Gear and add an item first"
+        elif not has_items:
+            items_heading = "No gear assigned yet — choose + Add Item or press A"
+        elif not has_available_gear:
+            items_heading = "Assigned Gear — every inventory item is already on this trip"
+        else:
+            items_heading = "Assigned Gear — select a row to edit or remove it"
+        self.query_one("#dash-items-heading", Static).update(items_heading)
+        self.query_one("#dash-add-item", Button).disabled = not has_available_gear
+        self.query_one("#dash-edit-item", Button).disabled = not has_items
+        self.query_one("#dash-remove-item", Button).disabled = not has_items
 
     def action_go_back(self) -> None:
         self.dismiss()
@@ -1053,6 +1180,7 @@ class GearPane(Vertical):
     BINDINGS = [
         Binding("a", "add", "Add"),
         Binding("e", "edit", "Edit"),
+        Binding("d", "duplicate", "Duplicate"),
         Binding("delete", "delete", "Delete"),
         Binding("r", "review", "Review"),
         Binding("escape", "clear_search", "Clear search", show=False),
@@ -1065,6 +1193,7 @@ class GearPane(Vertical):
         yield DataTable(id="gear-table", cursor_type="row", zebra_stripes=True)
         with Horizontal(classes="toolbar"):
             yield Button("Edit", id="gear-edit", variant="primary")
+            yield Button("Duplicate", id="gear-duplicate", variant="primary")
             yield Button("Delete", id="gear-delete", variant="error")
             yield Button("Review Candidates", id="gear-review")
             yield Static(id="gear-status", classes="status")
@@ -1095,7 +1224,18 @@ class GearPane(Vertical):
             visible_ids.add(g["id"])
         if selected_id in visible_ids:
             table.move_cursor(row=table.get_row_index(selected_id), animate=False)
-        label = f"{count} item(s)" + (" · review filter on" if review_only else "")
+        has_rows = count > 0
+        self.query_one("#gear-edit", Button).disabled = not has_rows
+        self.query_one("#gear-duplicate", Button).disabled = not has_rows
+        self.query_one("#gear-delete", Button).disabled = not has_rows
+        if not has_rows and review_only:
+            label = "No review candidates · select Review Candidates to show all gear"
+        elif not has_rows and t:
+            label = "No matching gear · press Esc to clear the search"
+        elif not has_rows:
+            label = "No gear yet · choose + Add Item or press A"
+        else:
+            label = f"{count} item(s)" + (" · review filter on" if review_only else "")
         self.query_one("#gear-status", Static).update(label)
 
     @on(Input.Changed, "#gear-search")
@@ -1116,6 +1256,9 @@ class GearPane(Vertical):
 
     def action_delete(self) -> None:
         self._delete()
+
+    def action_duplicate(self) -> None:
+        self._duplicate()
 
     def action_review(self) -> None:
         self._toggle_review()
@@ -1175,6 +1318,28 @@ class GearPane(Vertical):
     @on(Button.Pressed, "#gear-edit")
     def _edit_button(self) -> None:
         self._edit_gear(self._current_gear_id())
+
+    @on(Button.Pressed, "#gear-duplicate")
+    def _duplicate(self) -> None:
+        gear_id = self._current_gear_id()
+        if gear_id is None:
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        source = gc.find_gear(app.data, gear_id)
+        if source is None:
+            return
+        duplicate = gc.duplicate_gear(app.data, source)
+        app.data["gear"].append(duplicate)
+        if not app.save():
+            self._refresh_current()
+            return
+        self._refresh_current()
+        table = self.query_one("#gear-table", DataTable)
+        try:
+            table.move_cursor(row=table.get_row_index(duplicate["id"]), animate=False)
+        except KeyError:
+            pass
+        self.app.notify(f"Created {duplicate['name']}", timeout=3)
 
     @on(Button.Pressed, "#gear-delete")
     def _delete(self) -> None:
@@ -1255,7 +1420,10 @@ class TripsPane(Vertical):
             if t and t not in blob:
                 continue
             s = gc.compute_trip_summary(app.data, trip)
-            target = gc.format_weight_oz(s["target_lb"] * 16) if s["target_lb"] else "-"
+            target = (
+                gc.format_weight_oz(s["target_lb"] * 16)
+                if s["target_lb"] is not None else "-"
+            )
             if s["delta_lb"] is None:
                 delta = "-"
             elif s["delta_lb"] <= 0:
@@ -1268,7 +1436,18 @@ class TripsPane(Vertical):
             visible_ids.add(trip["id"])
         if selected_id in visible_ids:
             table.move_cursor(row=table.get_row_index(selected_id), animate=False)
-        self.query_one("#trip-status", Static).update(f"{count} trip(s)")
+        has_rows = count > 0
+        self.query_one("#trip-open", Button).disabled = not has_rows
+        self.query_one("#trip-duplicate", Button).disabled = not has_rows
+        self.query_one("#trip-delete", Button).disabled = not has_rows
+        self.query_one("#trip-compare", Button).disabled = not has_rows or len(app.data["trips"]) < 2
+        if not has_rows and t:
+            status = "No matching trips · press Esc to clear the search"
+        elif not has_rows:
+            status = "No trips yet · choose + Add Trip or press A"
+        else:
+            status = f"{count} trip(s)"
+        self.query_one("#trip-status", Static).update(status)
 
     @on(Input.Changed, "#trip-search")
     def _search_changed(self, event: Input.Changed) -> None:
@@ -1382,6 +1561,966 @@ class TripsPane(Vertical):
 
 
 # ---------------------------------------------------------------------------
+# AI insights
+# ---------------------------------------------------------------------------
+
+
+class InsightsProfileScreen(ModalScreen[Optional[dict]]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
+
+    def __init__(self, profile: dict):
+        super().__init__()
+        self.profile = copy.deepcopy(profile)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="insights-profile-dialog"):
+            yield Label("Pack profile", classes="dialog-title")
+            with VerticalScroll(classes="insights-form-scroll"):
+                yield Static("This context is stored with the portable library and included in AI requests.")
+                fields = [
+                    ("Experience level", "experience_level"),
+                    ("Priorities (weight, comfort, cost, durability, simplicity)", "priorities"),
+                    ("Typical conditions", "typical_conditions"),
+                    ("Budget notes", "budget_notes"),
+                    ("Constraints", "constraints"),
+                    ("Additional context", "additional_context"),
+                ]
+                for label, field in fields:
+                    yield Label(label)
+                    yield TextArea(
+                        self.profile.get(field, ""),
+                        id=f"profile-{field}",
+                        classes="profile-field",
+                    )
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="profile-cancel")
+                yield Button("Save Profile", id="profile-save", variant="success")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_save(self) -> None:
+        result = {
+            field: self.query_one(f"#profile-{field}", TextArea).text.strip()
+            for field in gc.INSIGHTS_PROFILE_DEFAULTS
+        }
+        self.dismiss(result)
+
+    @on(Button.Pressed, "#profile-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#profile-save")
+    def _save(self) -> None:
+        self.action_save()
+
+
+class ModelPickerScreen(ModalScreen[Optional[str]]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "choose", "Choose model"),
+    ]
+
+    def __init__(self, provider: str, models: List[str], current: str = ""):
+        super().__init__()
+        self.provider = provider
+        self.models = models
+        self.current = current
+
+    def compose(self) -> ComposeResult:
+        recommended = insights.RECOMMENDED_MODELS.get(self.provider, "")
+        with Vertical(id="dialog", classes="picker-dialog"):
+            yield Label(f"Choose a {self.provider.title()} model", classes="dialog-title")
+            yield Static(
+                f"Packrat suggests {recommended}." if recommended in self.models
+                else "Choose from the compatible models available to this account."
+            )
+            yield Input(placeholder="Filter models…", id="model-search")
+            yield DataTable(id="model-table", cursor_type="row", zebra_stripes=True)
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="model-cancel")
+                yield Button("Use Selected", id="model-choose", variant="success")
+
+    def on_mount(self) -> None:
+        self.query_one("#model-table", DataTable).add_columns("Model", "Recommendation")
+        self._refresh("")
+        self.query_one("#model-search", Input).focus()
+
+    def _refresh(self, query: str) -> None:
+        table = self.query_one("#model-table", DataTable)
+        table.clear()
+        term = query.strip().lower()
+        recommended = insights.RECOMMENDED_MODELS.get(self.provider, "")
+        for model in self.models:
+            if term and term not in model.lower():
+                continue
+            table.add_row(model, "Suggested" if model == recommended else "", key=model)
+        if self.current and self.current in self.models and not term:
+            try:
+                table.move_cursor(row=table.get_row_index(self.current), animate=False)
+            except KeyError:
+                pass
+
+    @on(Input.Changed, "#model-search")
+    def _search(self, event: Input.Changed) -> None:
+        self._refresh(event.value)
+
+    def _selected_model(self) -> Optional[str]:
+        table = self.query_one("#model-table", DataTable)
+        if not table.row_count:
+            return None
+        try:
+            return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        except Exception:
+            return None
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_choose(self) -> None:
+        selected = self._selected_model()
+        if selected is None:
+            self.app.notify("No model matches that filter", severity="warning")
+            return
+        self.dismiss(selected)
+
+    @on(DataTable.RowSelected, "#model-table")
+    def _row_selected(self, event: DataTable.RowSelected) -> None:
+        self.dismiss(str(event.row_key.value))
+
+    @on(Button.Pressed, "#model-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#model-choose")
+    def _choose(self) -> None:
+        self.action_choose()
+
+
+class InsightsSettingsScreen(ModalScreen[bool]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
+
+    def __init__(self, settings: dict, preferences_path: Optional[str]):
+        super().__init__()
+        self.settings = copy.deepcopy(settings)
+        self.preferences_path = preferences_path
+
+    def compose(self) -> ComposeResult:
+        providers = self.settings["providers"]
+        with Vertical(id="insights-settings-dialog"):
+            yield Label("AI providers", classes="dialog-title")
+            with VerticalScroll(classes="insights-form-scroll"):
+                yield Static(
+                    "API keys use environment variables first, then the OS keychain. Keys are never written "
+                    "to Packrat files. Fetch models to choose from those available to your account. "
+                    "A custom cloud URL receives that provider's credential."
+                )
+                yield Label("Primary provider")
+                yield Select(
+                    [(name.title(), name) for name in insights.PROVIDERS],
+                    value=self.settings["primary_provider"], id="settings-primary",
+                )
+                for name in insights.PROVIDERS:
+                    config = providers[name]
+                    environment_key = os.environ.get(insights.ENV_KEYS[name])
+                    key_placeholder = (
+                        "API key (environment variable active)"
+                        if environment_key
+                        else "API key (leave blank to keep stored key)"
+                    )
+                    with Horizontal(classes="provider-row"):
+                        yield Checkbox(
+                            name.title(),
+                            value=config["enabled"],
+                            id=f"settings-{name}-enabled",
+                        )
+                        yield Input(
+                            value=config["model"],
+                            placeholder="Model ID",
+                            id=f"settings-{name}-model",
+                        )
+                        yield Button(
+                            "Choose Model",
+                            id=f"settings-{name}-models",
+                            classes="model-fetch",
+                        )
+                    with Horizontal(classes="provider-row"):
+                        yield Input(
+                            value=config["base_url"],
+                            placeholder="Base URL",
+                            id=f"settings-{name}-url",
+                        )
+                        yield Input(
+                            placeholder=key_placeholder,
+                            password=True,
+                            id=f"settings-{name}-key",
+                        )
+            yield Static("", id="settings-status")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="settings-cancel")
+                yield Button("Remove Primary Key", id="settings-remove-key")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Test Primary & Save", id="settings-test")
+                yield Button("Save Without Test", id="settings-save", variant="success")
+
+    def _collect(self):
+        primary = self.query_one("#settings-primary", Select).value
+        if select_is_blank(primary):
+            raise ValueError("Choose a primary provider")
+        value = {"primary_provider": str(primary), "providers": {}}
+        for name in insights.PROVIDERS:
+            model = self.query_one(f"#settings-{name}-model", Input).value.strip()
+            base_url = self.query_one(f"#settings-{name}-url", Input).value.strip().rstrip("/")
+            enabled = self.query_one(f"#settings-{name}-enabled", Checkbox).value
+            if enabled and (not model or not base_url):
+                raise ValueError(f"{name.title()} needs a model and base URL")
+            if enabled:
+                base_url = preferences.validate_provider_base_url(base_url, name)
+            value["providers"][name] = {"enabled": enabled, "model": model, "base_url": base_url}
+        return value
+
+    def _pending_keys(self) -> dict:
+        return {
+            name: self.query_one(f"#settings-{name}-key", Input).value.strip()
+            for name in insights.PROVIDERS
+            if self.query_one(f"#settings-{name}-key", Input).value.strip()
+        }
+
+    def action_cancel(self) -> None:
+        self.workers.cancel_group(self, "provider-test")
+        self.workers.cancel_group(self, "model-fetch")
+        self.workers.cancel_group(self, "provider-save")
+        self.workers.cancel_group(self, "key-removal")
+        self.dismiss(False)
+
+    def action_save(self) -> None:
+        try:
+            value = self._collect()
+        except (ValueError, preferences.PreferencesError) as exc:
+            self.query_one("#settings-status", Static).update(str(exc))
+            return
+        self._start_save(value, "Provider settings saved")
+
+    def _start_save(self, value: dict, message: str) -> None:
+        keys = self._pending_keys()
+        self._set_testing(True)
+        self.query_one("#settings-status", Static).update("Saving provider settings…")
+        self._save_settings(value, keys, message)
+
+    @work(thread=True, exclusive=True, group="provider-save")
+    def _save_settings(self, value: dict, keys: dict, message: str) -> None:
+        try:
+            for name, key in keys.items():
+                insights.CredentialStore.set(name, key)
+            saved = preferences.save_insights_settings(value, self.preferences_path)
+        except (OSError, preferences.PreferencesError, insights.InsightError) as exc:
+            self.app.call_from_thread(self._finish_save, None, None, str(exc))
+            return
+        self.app.call_from_thread(self._finish_save, saved, message, None)
+
+    def _finish_save(self, saved, message, error) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        if error:
+            self.query_one("#settings-status", Static).update(error)
+            return
+        self.settings = saved
+        self.app.notify(message)
+        self.dismiss(True)
+
+    @on(Button.Pressed, "#settings-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#settings-save")
+    def _save(self) -> None:
+        self.action_save()
+
+    @on(Button.Pressed, "#settings-test")
+    def _test(self) -> None:
+        try:
+            value = self._collect()
+            provider = value["primary_provider"]
+            if not value["providers"][provider]["enabled"]:
+                raise ValueError(f"Enable {provider.title()} before testing it")
+        except ValueError as exc:
+            self.query_one("#settings-status", Static).update(str(exc))
+            return
+        api_key = self.query_one(f"#settings-{provider}-key", Input).value.strip() or None
+        self._set_testing(True)
+        self.query_one("#settings-status", Static).update("Testing connection…")
+        self._test_primary(value, api_key)
+
+    def _set_testing(self, testing: bool) -> None:
+        for widget_type in (Input, Select, Checkbox):
+            for widget in self.query(widget_type):
+                widget.disabled = testing
+        for button in self.query(Button):
+            if button.id != "settings-cancel":
+                button.disabled = testing
+
+    @on(Button.Pressed, ".model-fetch")
+    def _choose_model(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        provider = button_id.removeprefix("settings-").removesuffix("-models")
+        if provider not in insights.PROVIDERS:
+            return
+        base_url = self.query_one(f"#settings-{provider}-url", Input).value.strip()
+        try:
+            base_url = preferences.validate_provider_base_url(base_url, provider)
+        except preferences.PreferencesError as exc:
+            self.query_one("#settings-status", Static).update(str(exc))
+            return
+        api_key = self.query_one(f"#settings-{provider}-key", Input).value.strip() or None
+        self._set_testing(True)
+        self.query_one("#settings-status", Static).update(
+            f"Fetching {provider.title()} models…"
+        )
+        self._fetch_models(provider, {"base_url": base_url}, api_key)
+
+    @work(thread=True, exclusive=True, group="model-fetch")
+    def _fetch_models(self, provider: str, config: dict, api_key: Optional[str]) -> None:
+        try:
+            models = insights.ProviderClient().list_models(provider, config, api_key=api_key)
+        except insights.InsightError as exc:
+            self.app.call_from_thread(self._show_model_error, str(exc))
+            return
+        self.app.call_from_thread(self._show_models, provider, models)
+
+    def _show_model_error(self, message: str) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        self.query_one("#settings-status", Static).update(message)
+
+    def _show_models(self, provider: str, models: List[str]) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        if not models:
+            self.query_one("#settings-status", Static).update(
+                f"{provider.title()} returned no compatible text models"
+            )
+            return
+        self.query_one("#settings-status", Static).update(
+            f"Found {len(models)} compatible {provider.title()} model(s)"
+        )
+
+        def selected(model: Optional[str]) -> None:
+            if model:
+                self.query_one(f"#settings-{provider}-model", Input).value = model
+                self.query_one("#settings-status", Static).update(
+                    f"Selected {model}. Save when your provider setup is ready."
+                )
+
+        current = self.query_one(f"#settings-{provider}-model", Input).value.strip()
+        self.app.push_screen(ModelPickerScreen(provider, models, current), selected)
+
+    @on(Button.Pressed, "#settings-remove-key")
+    def _remove_key(self) -> None:
+        primary = self.query_one("#settings-primary", Select).value
+        if select_is_blank(primary):
+            self.query_one("#settings-status", Static).update("Choose a primary provider")
+            return
+
+        def handled(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            self._set_testing(True)
+            self.query_one("#settings-status", Static).update("Removing stored key…")
+            self._remove_stored_key(str(primary))
+
+        self.app.push_screen(
+            ConfirmScreen(f"Remove the stored {str(primary).title()} API key?", danger=True),
+            handled,
+        )
+
+    @work(thread=True, exclusive=True, group="key-removal")
+    def _remove_stored_key(self, provider: str) -> None:
+        insights.CredentialStore.delete(provider)
+        self.app.call_from_thread(self._finish_key_removal, provider)
+
+    def _finish_key_removal(self, provider: str) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        message = "Stored key removed."
+        if os.environ.get(insights.ENV_KEYS[provider]):
+            message += " The environment variable is still active."
+        self.query_one("#settings-status", Static).update(message)
+
+    @work(thread=True, exclusive=True, group="provider-test")
+    def _test_primary(self, value, api_key) -> None:
+        provider = value["primary_provider"]
+        try:
+            models = insights.ProviderClient().list_models(
+                provider, value["providers"][provider], api_key=api_key
+            )
+            message = f"Connected. Provider returned {len(models)} model(s)."
+        except insights.InsightError as exc:
+            self.app.call_from_thread(self._finish_test, value, None, str(exc))
+            return
+        self.app.call_from_thread(self._finish_test, value, message, None)
+
+    def _finish_test(self, value, message, error) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        if error:
+            self.query_one("#settings-status", Static).update(error)
+            return
+        self._start_save(value, message)
+
+
+class ProposalReviewScreen(ModalScreen[Optional[List[dict]]]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "apply", "Apply checked"),
+    ]
+
+    def __init__(self, proposals: List[dict]):
+        super().__init__()
+        self.proposals = proposals
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="proposal-dialog"):
+            yield Label("Review proposed changes", classes="dialog-title")
+            with VerticalScroll(classes="insights-form-scroll"):
+                yield Static("Only checked changes will be applied. Packrat validates and recalculates everything locally.")
+                for index, proposal in enumerate(self.proposals):
+                    reason = proposal.get("reason", "No reason supplied")
+                    summary = f"{proposal.get('type', 'change')} · {proposal.get('gear_id', 'new gear')} — {reason}"
+                    yield Checkbox(summary, value=False, id=f"proposal-{index}")
+                    yield Static(json.dumps(proposal, indent=2, ensure_ascii=False), classes="panel")
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="proposal-cancel")
+                yield Button("Apply Checked", id="proposal-apply", variant="success")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_apply(self) -> None:
+        self._apply()
+
+    @on(Button.Pressed, "#proposal-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#proposal-apply")
+    def _apply(self) -> None:
+        selected = [
+            proposal for index, proposal in enumerate(self.proposals)
+            if self.query_one(f"#proposal-{index}", Checkbox).value
+        ]
+        if not selected:
+            self.app.notify("Check at least one proposal", severity="warning")
+            return
+        self.dismiss(selected)
+
+
+class InsightsPane(Horizontal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.current_session = None
+        self.current_result = None
+        self._cancel_event = threading.Event()
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="insights-controls"):
+            yield Label("Guided mode")
+            yield Select([
+                ("Shakedown", "shakedown"), ("Trip Coach", "trip_coach"),
+                ("Swap Lab", "swap_lab"), ("Gear Research", "gear_research"),
+                ("Ask Anything", "ask"),
+            ], value="shakedown", id="insights-mode")
+            yield Label("Scope")
+            yield Select([("Full inventory", "inventory"), ("Selected trip", "trip")], value="inventory", id="insights-scope")
+            yield Select([], prompt="Choose trip", id="insights-trip")
+            yield Label("Provider")
+            yield Select([], prompt="Configure a provider", id="insights-provider")
+            with Horizontal(classes="toolbar"):
+                yield Button("Providers", id="insights-settings")
+                yield Button("Pack Profile", id="insights-profile")
+            yield Checkbox("Research the web", id="insights-research")
+            yield Label("Goal or question")
+            yield TextArea("", id="insights-goal")
+            with Horizontal(classes="toolbar"):
+                yield Button("Run", id="insights-run", variant="success")
+                yield Button("Council", id="insights-council")
+                yield Button("Cancel", id="insights-cancel")
+            with Horizontal(classes="toolbar"):
+                yield Button("New Session", id="insights-new")
+                yield Button("Refresh Context", id="insights-refresh")
+            with Horizontal(classes="toolbar"):
+                yield Button("Review Changes", id="insights-review")
+            yield Select([], prompt="Saved sessions", id="insights-sessions")
+            with Horizontal(classes="toolbar"):
+                yield Button("Load", id="insights-load")
+                yield Button("Export", id="insights-export")
+                yield Button("Delete", id="insights-delete", variant="error")
+            yield Static("Configure a provider to begin.", id="insights-status")
+        with VerticalScroll(id="insights-result"):
+            yield Markdown("# Packrat Insights\n\nChoose a guided mode and provider, then describe what you want to learn.")
+
+    def on_mount(self) -> None:
+        self.query_one("#insights-trip", Select).display = False
+        self.refresh_options()
+
+    def refresh_options(self) -> None:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        trip_select = self.query_one("#insights-trip", Select)
+        trip_select.set_options([(trip["name"], trip["id"]) for trip in app.data["trips"]])
+        settings = app.insights_settings
+        configured = [
+            (name.title(), name) for name, config in settings["providers"].items()
+            if config["enabled"] and config["model"]
+        ]
+        provider_select = self.query_one("#insights-provider", Select)
+        provider_select.set_options(configured)
+        enabled_names = {value for _, value in configured}
+        if settings["primary_provider"] in enabled_names:
+            provider_select.value = settings["primary_provider"]
+        elif configured:
+            provider_select.value = configured[0][1]
+        sessions = insights.list_sessions(app.insights_dir)
+        session_select = self.query_one("#insights-sessions", Select)
+        previous_session = session_select.value
+        session_select.set_options([
+            (f"{item['mode'].replace('_', ' ').title()} · {item['updated_at']}", item["id"])
+            for item in sessions
+        ])
+        session_ids = {item["id"] for item in sessions}
+        current_id = self.current_session.get("id") if self.current_session else None
+        if current_id in session_ids:
+            session_select.value = current_id
+        elif previous_session in session_ids:
+            session_select.value = previous_session
+        self._update_control_states()
+        if configured:
+            status = f"{len(configured)} provider(s) ready · sessions: {app.insights_dir}"
+        else:
+            status = "No provider configured. Choose Providers to add a cloud or local model."
+        self.query_one("#insights-status", Static).update(status)
+
+    def _configured_provider_count(self) -> int:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        return sum(
+            bool(config["enabled"] and config["model"])
+            for config in app.insights_settings["providers"].values()
+        )
+
+    def _update_control_states(self, running: bool = False) -> None:
+        provider_count = self._configured_provider_count()
+        provider = self.query_one("#insights-provider", Select).value
+        mode = self.query_one("#insights-mode", Select).value
+        local_research = provider == "local" and mode == "gear_research"
+        for selector in ("#insights-mode", "#insights-scope", "#insights-trip", "#insights-provider"):
+            self.query_one(selector, Select).disabled = running
+        self.query_one("#insights-goal", TextArea).disabled = running
+        self.query_one("#insights-settings", Button).disabled = running
+        self.query_one("#insights-profile", Button).disabled = running
+        self.query_one("#insights-new", Button).disabled = running
+        self.query_one("#insights-run", Button).disabled = (
+            running or provider_count == 0 or local_research
+        )
+        self.query_one("#insights-council", Button).disabled = running or provider_count < 2
+        self.query_one("#insights-cancel", Button).disabled = not running
+        selected_session = self.query_one("#insights-sessions", Select).value
+        has_saved_selection = not select_is_blank(selected_session)
+        self.query_one("#insights-sessions", Select).disabled = running
+        self.query_one("#insights-load", Button).disabled = running or not has_saved_selection
+        self.query_one("#insights-delete", Button).disabled = running or not has_saved_selection
+        self.query_one("#insights-export", Button).disabled = running or self.current_session is None
+        self.query_one("#insights-refresh", Button).disabled = running or self.current_session is None
+        self.query_one("#insights-review", Button).disabled = running or not bool(
+            self.current_result and self.current_result.get("proposals")
+        )
+        research = self.query_one("#insights-research", Checkbox)
+        research.disabled = running or select_is_blank(provider) or provider == "local"
+        if research.disabled:
+            research.value = False
+        elif mode == "gear_research":
+            research.value = True
+
+    @on(Select.Changed, "#insights-scope")
+    def _scope_changed(self, event: Select.Changed) -> None:
+        self.query_one("#insights-trip", Select).display = event.value == "trip"
+
+    @on(Select.Changed, "#insights-mode")
+    def _mode_changed(self, event: Select.Changed) -> None:
+        self._update_control_states()
+        provider = self.query_one("#insights-provider", Select).value
+        if event.value == "gear_research" and provider == "local":
+            self.query_one("#insights-status", Static).update(
+                "Gear Research needs a cloud provider. Choose another provider or use Council."
+            )
+
+    @on(Select.Changed, "#insights-provider")
+    def _provider_changed(self, event: Select.Changed) -> None:
+        research = self.query_one("#insights-research", Checkbox)
+        was_researching = research.value
+        self._update_control_states()
+        if event.value == "local" and was_researching:
+            self.app.notify("Local models use library context only", severity="information")
+
+    @on(Select.Changed, "#insights-sessions")
+    def _session_changed(self) -> None:
+        self._update_control_states()
+
+    def _run_inputs(self, allow_local_research: bool = False):
+        mode = self.query_one("#insights-mode", Select).value
+        scope = self.query_one("#insights-scope", Select).value
+        provider = self.query_one("#insights-provider", Select).value
+        trip_id = self.query_one("#insights-trip", Select).value
+        research = self.query_one("#insights-research", Checkbox).value
+        goal = self.query_one("#insights-goal", TextArea).text.strip()
+        if any(select_is_blank(value) for value in (mode, scope, provider)):
+            raise insights.InsightError("Choose a mode, scope, and configured provider")
+        research = bool(research or mode == "gear_research")
+        if scope == "trip" and select_is_blank(trip_id):
+            raise insights.InsightError("Choose a trip for trip-scoped analysis")
+        if research and provider == "local" and not allow_local_research:
+            raise insights.InsightError("The local provider does not support web research")
+        return (
+            str(mode), str(scope), str(provider),
+            None if select_is_blank(trip_id) else str(trip_id), research, goal,
+        )
+
+    @on(Button.Pressed, "#insights-run")
+    def _run_pressed(self) -> None:
+        try:
+            values = self._run_inputs()
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        provider = values[2]
+        config = app.insights_settings["providers"][provider]
+        default_url = preferences.DEFAULT_INSIGHTS_SETTINGS["providers"][provider]["base_url"]
+        custom_cloud = provider != "local" and insights.provider_base_url(
+            provider, config["base_url"]
+        ) != default_url
+        warnings = []
+        if values[4]:
+            warnings.append("enable provider web research, which may have additional charges")
+        if custom_cloud:
+            warnings.append("send this provider's API key to its configured custom URL")
+        if warnings:
+            self.app.push_screen(
+                ConfirmScreen("This run will " + " and ".join(warnings) + ". Continue?"),
+                lambda confirmed: self._start_single(values) if confirmed else None,
+            )
+        else:
+            self._start_single(values)
+
+    def _start_single(self, values) -> None:
+        self._cancel_event.clear()
+        self._update_control_states(running=True)
+        self.query_one("#insights-status", Static).update(
+            "Analyzing… Packrat remains usable while the provider responds."
+        )
+        self._run_provider(values, council=False)
+
+    @on(Button.Pressed, "#insights-council")
+    def _council_pressed(self) -> None:
+        try:
+            values = self._run_inputs(allow_local_research=True)
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        custom = [
+            name for name, config in app.insights_settings["providers"].items()
+            if name != "local" and config["enabled"] and insights.provider_base_url(name, config["base_url"])
+            != preferences.DEFAULT_INSIGHTS_SETTINGS["providers"][name]["base_url"]
+        ]
+        message = "Run every configured provider and a synthesis call? This may incur additional charges."
+        if custom:
+            message += " API keys will be sent to custom URLs for: " + ", ".join(custom) + "."
+        self.app.push_screen(
+            ConfirmScreen(message),
+            lambda confirmed: self._start_council(values) if confirmed else None,
+        )
+
+    def _start_council(self, values) -> None:
+        self._cancel_event.clear()
+        self._update_control_states(running=True)
+        self.query_one("#insights-status", Static).update("Council is analyzing in parallel…")
+        self._run_provider(values, council=True)
+
+    @on(Button.Pressed, "#insights-cancel")
+    def _cancel_run(self) -> None:
+        self._cancel_event.set()
+        cancelled = self.workers.cancel_group(self, "insight-run")
+        self._update_control_states()
+        if cancelled:
+            self.query_one("#insights-status", Static).update("Insight run cancelled")
+
+    @work(thread=True, exclusive=True, group="insight-run")
+    def _run_provider(self, values, council=False) -> None:
+        mode, scope, provider, trip_id, research, goal = values
+        app: "GearTrackerApp" = self.app  # type: ignore
+        try:
+            if self.current_session is None:
+                packet = insights.build_context_packet(app.data, scope, trip_id)
+                session = insights.new_session(mode, scope, packet, goal, provider, research, trip_id)
+            else:
+                session = copy.deepcopy(self.current_session)
+                packet = session["context"]
+            history = [
+                {"user": turn.get("goal", ""), "assistant": turn.get("result", {}).get("answer_markdown", "")}
+                for turn in session["turns"]
+            ]
+            prompt = insights.build_prompt(mode, packet, goal, history, research)
+            client = insights.ProviderClient()
+            if council:
+                result = insights.run_council(
+                    client, app.insights_settings["providers"], app.insights_settings["primary_provider"],
+                    prompt, research,
+                )
+            else:
+                config = app.insights_settings["providers"][provider]
+                received = [0]
+                def progress(delta: str) -> None:
+                    if self._cancel_event.is_set():
+                        raise insights.InsightCancelled("Insight run cancelled")
+                    received[0] += len(delta)
+                    if received[0] == len(delta) or received[0] % 200 < len(delta):
+                        self.app.call_from_thread(
+                            self.query_one("#insights-status", Static).update,
+                            f"Receiving response… {received[0]} characters",
+                        )
+                result = insights.run_with_repair(
+                    client, provider, config, prompt, research, on_delta=progress
+                )
+            if self._cancel_event.is_set():
+                raise insights.InsightCancelled("Insight run cancelled")
+            try:
+                result["proposals"] = insights.validate_proposals(app.data, result.get("proposals", []), trip_id)
+            except insights.InsightError as exc:
+                result["proposal_error"] = str(exc)
+                result["proposals"] = []
+            result.pop("raw", None)
+            session["turns"].append({"goal": goal, "created_at": insights._utc_now(), "result": result})
+            insights.save_session(app.insights_dir, session)
+        except insights.InsightCancelled:
+            return
+        except (OSError, insights.InsightError) as exc:
+            self.app.call_from_thread(self._show_error, str(exc))
+            return
+        self.app.call_from_thread(self._show_result, session, result)
+
+    def _show_error(self, message: str) -> None:
+        self._update_control_states()
+        self.query_one("#insights-status", Static).update(f"Failed: {message}")
+        self.app.notify(message, severity="error", timeout=8)
+
+    def _show_result(self, session, result) -> None:
+        self._update_control_states()
+        self.current_session = session
+        self.current_result = result
+        markdown = result.get("answer_markdown", "No narrative response.")
+        citations = result.get("citations", [])
+        if citations:
+            markdown += "\n\n## Sources\n" + "\n".join(
+                f"- [{item['title']}]({item['url']})" for item in citations
+            )
+        council_results = result.get("council_results", {})
+        for name, answer in council_results.items():
+            markdown += f"\n\n---\n\n## {name.title()}\n\n{answer.get('answer_markdown', '')}"
+        self.query_one("#insights-result", VerticalScroll).query_one(Markdown).update(markdown)
+        proposal_count = len(result.get("proposals", []))
+        usage = result.get("usage", {})
+        status = f"Saved session · {proposal_count} reviewable change(s)"
+        if usage:
+            status += f" · usage: {usage}"
+        if result.get("proposal_error"):
+            status += f" · changes disabled: {result['proposal_error']}"
+        self.refresh_options()
+        self.query_one("#insights-status", Static).update(status)
+
+    @on(Button.Pressed, "#insights-new")
+    def _new_session(self) -> None:
+        self.current_session = None
+        self.current_result = None
+        self.query_one("#insights-goal", TextArea).clear()
+        self.query_one("#insights-result", VerticalScroll).query_one(Markdown).update(
+            "# New insight session\n\nChoose context and ask a question."
+        )
+        self._update_control_states()
+
+    @on(Button.Pressed, "#insights-refresh")
+    def _refresh_context(self) -> None:
+        if not self.current_session:
+            self.app.notify("Load or run a session first", severity="warning")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        try:
+            packet = insights.build_context_packet(
+                app.data, self.current_session["scope"], self.current_session.get("trip_id")
+            )
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        revisions = self.current_session.setdefault("context_revisions", [])
+        revisions.append({
+            "replaced_at": insights._utc_now(),
+            "context": self.current_session["context"],
+        })
+        self.current_session["context"] = packet
+        insights.save_session(app.insights_dir, self.current_session)
+        self.query_one("#insights-status", Static).update(
+            f"Context refreshed · {len(revisions)} prior snapshot(s) retained"
+        )
+
+    @on(Button.Pressed, "#insights-settings")
+    def _settings(self) -> None:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        def handled(saved: bool) -> None:
+            if saved:
+                app.insights_settings = preferences.load_insights_settings(app.preferences_path)
+                self.refresh_options()
+        self.app.push_screen(InsightsSettingsScreen(app.insights_settings, app.preferences_path), handled)
+
+    @on(Button.Pressed, "#insights-profile")
+    def _profile(self) -> None:
+        app: "GearTrackerApp" = self.app  # type: ignore
+        def handled(profile: Optional[dict]) -> None:
+            if profile is None:
+                return
+            app.data["insights_profile"] = profile
+            if app.save():
+                self.app.notify("Pack profile saved")
+        self.app.push_screen(InsightsProfileScreen(app.data["insights_profile"]), handled)
+
+    @on(Button.Pressed, "#insights-review")
+    def _review(self) -> None:
+        if not self.current_result or not self.current_result.get("proposals"):
+            self.app.notify("This result has no valid reviewable changes", severity="warning")
+            return
+        self.app.push_screen(ProposalReviewScreen(self.current_result["proposals"]), self._apply_proposals)
+
+    def _apply_proposals(self, selected: Optional[List[dict]]) -> None:
+        if not selected:
+            return
+        self._review_gear_drafts(list(selected), [])
+
+    def _review_gear_drafts(self, remaining: List[dict], approved: List[dict]) -> None:
+        if not remaining:
+            self._commit_proposals(approved)
+            return
+        proposal = remaining.pop(0)
+        kind = proposal["type"]
+        if kind not in {"gear_create", "gear_update"}:
+            approved.append(proposal)
+            self._review_gear_drafts(remaining, approved)
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        if kind == "gear_create":
+            initial = copy.deepcopy(proposal["gear"])
+            mode = "add"
+        else:
+            current = gc.find_gear(app.data, proposal["gear_id"])
+            initial = copy.deepcopy(current)
+            initial.update(copy.deepcopy(proposal["changes"]))
+            mode = "edit"
+
+        def handled(result: Optional[dict]) -> None:
+            if result is not None:
+                if kind == "gear_create":
+                    result.pop("id", None)
+                    approved.append({
+                        "type": "gear_create", "gear": result,
+                        "reason": proposal.get("reason", "AI gear draft"),
+                    })
+                else:
+                    approved.append({
+                        "type": "gear_update", "gear_id": proposal["gear_id"],
+                        "changes": result, "reason": proposal.get("reason", "AI gear edit"),
+                    })
+            self._review_gear_drafts(remaining, approved)
+
+        self.app.push_screen(GearFormScreen(mode=mode, initial=initial), handled)
+
+    def _commit_proposals(self, selected: List[dict]) -> None:
+        if not selected:
+            self.app.notify("No proposed changes were approved", severity="information")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        trip_id = self.current_session.get("trip_id") if self.current_session else None
+        try:
+            changed, summaries = insights.apply_proposals(app.data, selected, trip_id)
+        except (gc.DataValidationError, insights.InsightError) as exc:
+            self.app.notify(f"Could not apply changes: {exc}", severity="error", timeout=7)
+            return
+        app.data = changed
+        if app.save():
+            if self.current_session:
+                self.current_session["applied_proposals"].extend(selected)
+                insights.save_session(app.insights_dir, self.current_session)
+            app._refresh_tab("gear")
+            app._refresh_tab("trips")
+            self.app.notify("; ".join(summaries), title="AI changes applied", timeout=7)
+
+    @on(Button.Pressed, "#insights-load")
+    def _load_session(self) -> None:
+        selected = self.query_one("#insights-sessions", Select).value
+        if select_is_blank(selected):
+            self.app.notify("Choose a saved session", severity="warning")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        try:
+            session = insights.load_session(os.path.join(app.insights_dir, f"{selected}.json"))
+        except insights.InsightError as exc:
+            self.app.notify(str(exc), severity="error")
+            return
+        self.current_session = session
+        if session["turns"]:
+            self._show_result(session, session["turns"][-1]["result"])
+
+    @on(Button.Pressed, "#insights-export")
+    def _export_session(self) -> None:
+        if not self.current_session:
+            self.app.notify("Load or run a session first", severity="warning")
+            return
+        app: "GearTrackerApp" = self.app  # type: ignore
+        filename = f"insight_{self.current_session['id'][:8]}_{date.today().isoformat()}.md"
+        app.write_export(filename, insights.render_session_markdown(self.current_session))
+
+    @on(Button.Pressed, "#insights-delete")
+    def _delete_session(self) -> None:
+        selected = self.query_one("#insights-sessions", Select).value
+        if select_is_blank(selected):
+            return
+
+        def handled(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            app: "GearTrackerApp" = self.app  # type: ignore
+            try:
+                insights.delete_session(app.insights_dir, str(selected))
+            except insights.InsightError as exc:
+                self.app.notify(str(exc), severity="error")
+                self.refresh_options()
+                return
+            if self.current_session and self.current_session.get("id") == selected:
+                self.current_session = None
+                self.current_result = None
+                result = self.query_one("#insights-result", VerticalScroll)
+                result.query_one(Markdown).update(
+                    "# Packrat Insights\n\nSession deleted. Start a new question or load another session."
+                )
+            self.refresh_options()
+            self.query_one("#insights-status", Static).update("Saved session deleted")
+
+        self.app.push_screen(
+            ConfirmScreen("Delete this saved insight session? This cannot be undone.", danger=True),
+            handled,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Reports pane
 # ---------------------------------------------------------------------------
 
@@ -1398,8 +2537,6 @@ class ReportsPane(Vertical):
     def on_mount(self) -> None:
         self.query_one("#report-trip-table", DataTable).add_columns("ID", "Name", "Dates", "Items")
         self.refresh_table()
-        app: "GearTrackerApp" = self.app  # type: ignore
-        self.query_one("#report-status", Static).update(f"Exports are written to: {app.export_dir}")
 
     def refresh_table(self) -> None:
         app: "GearTrackerApp" = self.app  # type: ignore
@@ -1407,6 +2544,14 @@ class ReportsPane(Vertical):
         table.clear()
         for trip in app.data["trips"]:
             table.add_row(trip["id"], trip["name"], trip.get("dates", ""), str(len(trip["items"])), key=trip["id"])
+        self.query_one("#report-export-trip", Button).disabled = table.row_count == 0
+        prefix = (
+            "No trips yet · full inventory export is still available. "
+            if table.row_count == 0 else ""
+        )
+        self.query_one("#report-status", Static).update(
+            f"{prefix}Exports are written to: {app.export_dir}"
+        )
 
     @on(Button.Pressed, "#report-export-trip")
     def _export_trip(self) -> None:
@@ -1438,7 +2583,9 @@ class ReportsPane(Vertical):
 # ---------------------------------------------------------------------------
 
 
-def _prepare_library(directory: str) -> Tuple[str, dict, bool]:
+def _prepare_library(
+    directory: str, include_examples: bool = True
+) -> Tuple[str, dict, bool]:
     """Validate a folder and load or create its Packrat library."""
     normalized_directory = preferences.normalize_path(directory)
     if os.path.exists(normalized_directory) and not os.path.isdir(normalized_directory):
@@ -1452,7 +2599,7 @@ def _prepare_library(directory: str) -> Tuple[str, dict, bool]:
     data_path = preferences.data_path_for_directory(normalized_directory)
     created = not os.path.exists(data_path)
     if created:
-        data = gc.example_data()
+        data = gc.example_data() if include_examples else gc.blank_data()
         gc.save_data(data_path, data)
     else:
         data = gc.load_data(data_path)
@@ -1474,12 +2621,18 @@ class SetupApp(App):
     def compose(self) -> ComposeResult:
         with Vertical(id="setup-dialog"):
             yield Static("🎒 Welcome to Packrat", classes="dialog-title")
-            yield Static(
-                "Choose where Packrat should keep your gear library. "
-                "New libraries start with clearly labeled example gear."
-            )
-            yield Label("Gear storage folder")
-            yield Input(value=str(preferences.suggested_data_directory()), id="setup-folder")
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Static(
+                    "Choose where Packrat should keep your gear library. "
+                    "Start with examples for a quick tour, or uncheck the option for a blank library."
+                )
+                yield Label("Gear storage folder")
+                yield Input(value=str(preferences.suggested_data_directory()), id="setup-folder")
+                yield Checkbox(
+                    "Include example gear and trip",
+                    value=True,
+                    id="setup-examples",
+                )
             yield Static(self.initial_error, id="setup-error")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Quit", id="setup-quit")
@@ -1501,8 +2654,11 @@ class SetupApp(App):
     @on(Button.Pressed, "#setup-use")
     def _use_folder(self) -> None:
         directory = self.query_one("#setup-folder", Input).value
+        include_examples = self.query_one("#setup-examples", Checkbox).value
         try:
-            data_path, _data, created = _prepare_library(directory)
+            data_path, _data, created = _prepare_library(
+                directory, include_examples=include_examples
+            )
             try:
                 preferences.save_preferences(
                     os.path.dirname(data_path), path=self.preferences_path
@@ -1524,26 +2680,42 @@ class SetupApp(App):
         self.exit(None)
 
 
-class PreferencesScreen(ModalScreen[Optional[Tuple[str, str]]]):
+LibraryPreferenceResult = Union[Tuple[str, str], Tuple[str, str, bool]]
+
+
+class PreferencesScreen(ModalScreen[Optional[LibraryPreferenceResult]]):
     """Choose whether to open another library or copy the current one."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
     AUTO_FOCUS = "#preferences-folder"
 
-    def __init__(self, current_directory: str, initial_error: str = ""):
+    def __init__(
+        self,
+        current_directory: str,
+        initial_error: str = "",
+        include_examples: bool = True,
+    ):
         super().__init__()
         self.current_directory = current_directory
         self.initial_error = initial_error
+        self.include_examples = include_examples
 
     def compose(self) -> ComposeResult:
         with Vertical(id="preferences-dialog"):
             yield Static("⚙ Storage Preferences", classes="dialog-title")
-            yield Static(
-                "Open a library in another folder, or copy the current library there. "
-                "Packrat never overwrites an existing destination when copying."
-            )
-            yield Label("Gear storage folder")
-            yield Input(value=self.current_directory, id="preferences-folder")
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Static(
+                    "Open a library in another folder, or copy the current library there. "
+                    "The examples option only affects a newly created library; existing and "
+                    "copied libraries are unchanged."
+                )
+                yield Label("Gear storage folder")
+                yield Input(value=self.current_directory, id="preferences-folder")
+                yield Checkbox(
+                    "Include examples if creating a new library",
+                    value=self.include_examples,
+                    id="preferences-examples",
+                )
             yield Static(self.initial_error, id="preferences-error")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="preferences-cancel")
@@ -1572,11 +2744,23 @@ class PreferencesScreen(ModalScreen[Optional[Tuple[str, str]]]):
 
     @on(Button.Pressed, "#preferences-open")
     def _open(self) -> None:
-        self.dismiss(("open", self.query_one("#preferences-folder", Input).value))
+        self.dismiss(
+            (
+                "open",
+                self.query_one("#preferences-folder", Input).value,
+                self.query_one("#preferences-examples", Checkbox).value,
+            )
+        )
 
     @on(Button.Pressed, "#preferences-copy")
     def _copy(self) -> None:
-        self.dismiss(("copy", self.query_one("#preferences-folder", Input).value))
+        self.dismiss(
+            (
+                "copy",
+                self.query_one("#preferences-folder", Input).value,
+                self.query_one("#preferences-examples", Checkbox).value,
+            )
+        )
 
 
 class GearTrackerApp(App):
@@ -1586,10 +2770,15 @@ class GearTrackerApp(App):
         Binding("1", "show_tab('gear')", "Gear"),
         Binding("2", "show_tab('trips')", "Trips"),
         Binding("3", "show_tab('reports')", "Reports"),
+        Binding("4", "show_tab('insights')", "Insights"),
         Binding("slash", "search", "Search"),
         Binding("question_mark", "show_help", "Help"),
         Binding("ctrl+b", "backup", "Backup"),
+        Binding("ctrl+shift+b", "restore_backup", "Restore", show=False),
+        Binding("ctrl+l", "reload_library", "Reload"),
         Binding("ctrl+p", "preferences", "Preferences", priority=True),
+        Binding("ctrl+z", "undo", "Undo"),
+        Binding("ctrl+y", "redo", "Redo", show=False),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
@@ -1599,11 +2788,15 @@ class GearTrackerApp(App):
         self.data_path = os.path.abspath(os.path.expanduser(data_path))
         self.preferences_path = preferences_path
         self.export_dir = gc.export_dir_for_data(self.data_path)
+        self.insights_dir = insights.insights_dir_for_data(self.data_path)
+        self.insights_settings = preferences.load_insights_settings(self.preferences_path)
         self.data = gc.load_data(self.data_path)
         if not os.path.exists(self.data_path):
             gc.save_data(self.data_path, self.data)
         self._data_signature = gc.file_signature(self.data_path)
         self._last_saved_data = copy.deepcopy(self.data)
+        self._undo_stack: List[dict] = []
+        self._redo_stack: List[dict] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, time_format="%I:%M %p")
@@ -1614,6 +2807,8 @@ class GearTrackerApp(App):
                 yield TripsPane()
             with TabPane("📄 Reports", id="reports"):
                 yield ReportsPane()
+            with TabPane("✨ Insights", id="insights"):
+                yield InsightsPane(id="insights-pane")
         yield Footer()
 
     def action_show_tab(self, tab_id: str) -> None:
@@ -1640,10 +2835,11 @@ class GearTrackerApp(App):
             self._change_library,
         )
 
-    def _change_library(self, result: Optional[Tuple[str, str]]) -> None:
+    def _change_library(self, result: Optional[LibraryPreferenceResult]) -> None:
         if result is None:
             return
-        operation, directory = result
+        operation, directory = result[:2]
+        include_examples = result[2] if len(result) == 3 else True
         created_path: Optional[str] = None
         try:
             normalized_directory = preferences.normalize_path(directory)
@@ -1660,7 +2856,9 @@ class GearTrackerApp(App):
                 created_path = destination_path
                 new_data = gc.load_data(destination_path)
             elif operation == "open":
-                destination_path, new_data, created = _prepare_library(normalized_directory)
+                destination_path, new_data, created = _prepare_library(
+                    normalized_directory, include_examples=include_examples
+                )
                 if created:
                     created_path = destination_path
             else:
@@ -1676,16 +2874,22 @@ class GearTrackerApp(App):
                 except OSError:
                     pass
             self.push_screen(
-                PreferencesScreen(directory, initial_error=f"Library switch failed: {exc}"),
+                PreferencesScreen(
+                    directory,
+                    initial_error=f"Library switch failed: {exc}",
+                    include_examples=include_examples,
+                ),
                 self._change_library,
             )
             return
 
         self.data_path = destination_path
         self.export_dir = gc.export_dir_for_data(destination_path)
+        self.insights_dir = insights.insights_dir_for_data(destination_path)
         self.data = new_data
         self._data_signature = gc.file_signature(destination_path)
         self._last_saved_data = copy.deepcopy(new_data)
+        self._clear_history()
         self._refresh_tab(self.query_one(TabbedContent).active)
         self.notify(f"Now using {destination_path}", title="Library changed", timeout=5)
 
@@ -1696,6 +2900,73 @@ class GearTrackerApp(App):
             self.notify(f"Backup failed: {exc}", severity="error", timeout=5)
             return
         self.notify(f"Wrote {path}", title="Backup complete", timeout=4)
+
+    def action_restore_backup(self) -> None:
+        if isinstance(self.screen, (ModalScreen, TripComparisonScreen)):
+            self.notify("Close the current dialog or comparison before restoring", severity="warning")
+            return
+        backup_path = self.data_path + ".bak"
+        if not os.path.exists(backup_path):
+            self.notify("No backup exists for the current library yet", severity="warning")
+            return
+
+        def handled(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            try:
+                restored, signature, recovery_path = gc.restore_backup(
+                    self.data_path, expected_signature=self._data_signature
+                )
+            except (OSError, gc.DataValidationError) as exc:
+                self.notify(f"Restore failed; current data was kept: {exc}", severity="error", timeout=7)
+                return
+            self.data = restored
+            self._data_signature = signature
+            self._last_saved_data = copy.deepcopy(restored)
+            self._clear_history()
+            if isinstance(self.screen, TripDashboardScreen):
+                self.screen.refresh_dashboard()
+            else:
+                self._refresh_tab(self.query_one(TabbedContent).active)
+            self.notify(
+                f"Backup restored. The replaced library is preserved at {recovery_path}",
+                title="Restore complete",
+                timeout=7,
+            )
+
+        self.push_screen(
+            ConfirmScreen(
+                "Restore the latest backup? The current library will be preserved separately first.",
+                danger=True,
+            ),
+            handled,
+        )
+
+    def action_reload_library(self) -> None:
+        if isinstance(self.screen, (ModalScreen, TripComparisonScreen)):
+            self.notify("Close the current dialog or comparison before reloading", severity="warning")
+            return
+        if not os.path.exists(self.data_path):
+            self.notify("The current library file no longer exists", severity="error", timeout=6)
+            return
+        try:
+            reloaded = gc.load_data(self.data_path)
+        except (OSError, gc.DataValidationError) as exc:
+            self.notify(f"Reload failed; current data was kept: {exc}", severity="error", timeout=7)
+            return
+        self.data = reloaded
+        self._data_signature = gc.file_signature(self.data_path)
+        self._last_saved_data = copy.deepcopy(reloaded)
+        self._clear_history()
+        if isinstance(self.screen, TripDashboardScreen):
+            self.screen.refresh_dashboard()
+        else:
+            self._refresh_tab(self.query_one(TabbedContent).active)
+        self.notify(
+            f"Loaded {len(reloaded['gear'])} gear item(s) and {len(reloaded['trips'])} trip(s)",
+            title="Library reloaded",
+            timeout=4,
+        )
 
     @on(TabbedContent.TabActivated)
     def _tab_activated(self, event: TabbedContent.TabActivated) -> None:
@@ -1713,8 +2984,11 @@ class GearTrackerApp(App):
             pane.refresh_table(pane.query_one("#trip-search", Input).value)
         elif tab_id == "reports":
             self.query_one(ReportsPane).refresh_table()
+        elif tab_id == "insights":
+            self.query_one(InsightsPane).refresh_options()
 
     def save(self) -> bool:
+        previous = copy.deepcopy(self._last_saved_data)
         try:
             self._data_signature = gc.save_data(
                 self.data_path,
@@ -1725,8 +2999,64 @@ class GearTrackerApp(App):
             self.data = copy.deepcopy(self._last_saved_data)
             self.notify(f"Save failed; changes were rolled back: {exc}", severity="error", timeout=7)
             return False
+        if self.data != previous:
+            self._undo_stack.append(previous)
+            del self._undo_stack[:-25]
+            self._redo_stack.clear()
         self._last_saved_data = copy.deepcopy(self.data)
         return True
+
+    def _clear_history(self) -> None:
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+
+    def _refresh_current_view(self) -> None:
+        if isinstance(self.screen, TripDashboardScreen):
+            self.screen.refresh_dashboard()
+        else:
+            self._refresh_tab(self.query_one(TabbedContent).active)
+
+    def _apply_history(
+        self,
+        source: List[dict],
+        destination: List[dict],
+        action: str,
+    ) -> None:
+        if isinstance(self.screen, (ModalScreen, TripComparisonScreen)):
+            self.notify(f"Close the current dialog or comparison before {action.lower()}ing", severity="warning")
+            return
+        if not source:
+            self.notify(f"Nothing to {action.lower()}", severity="information", timeout=2)
+            return
+        target = source.pop()
+        current = copy.deepcopy(self.data)
+        try:
+            signature = gc.save_data(
+                self.data_path,
+                target,
+                expected_signature=self._data_signature,
+            )
+        except (OSError, gc.DataValidationError) as exc:
+            source.append(target)
+            self.notify(
+                f"{action} failed; current data was kept: {exc}",
+                severity="error",
+                timeout=7,
+            )
+            return
+        destination.append(current)
+        del destination[:-25]
+        self.data = copy.deepcopy(target)
+        self._data_signature = signature
+        self._last_saved_data = copy.deepcopy(target)
+        self._refresh_current_view()
+        self.notify(f"{action} complete", timeout=2)
+
+    def action_undo(self) -> None:
+        self._apply_history(self._undo_stack, self._redo_stack, "Undo")
+
+    def action_redo(self) -> None:
+        self._apply_history(self._redo_stack, self._undo_stack, "Redo")
 
     def write_export(self, filename: str, content: str) -> Optional[str]:
         path = os.path.join(self.export_dir, filename)

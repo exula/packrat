@@ -4,10 +4,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from textual.widgets import Button, Input, Label, Static, TabbedContent
+from textual.widgets import Button, Checkbox, Input, Label, Static, TabbedContent
 
 from gear_tui import (
+    ConfirmScreen,
     GearFormScreen,
+    GearPickerScreen,
     GearTrackerApp,
     PackAuditScreen,
     PreferencesScreen,
@@ -15,6 +17,7 @@ from gear_tui import (
     SetupApp,
     TripComparisonScreen,
     TripDashboardScreen,
+    TripFormScreen,
     TripItemFormScreen,
 )
 import gear_core as gc
@@ -42,6 +45,102 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("escape", "ctrl+b")
                 self.assertTrue(Path(f"{path}.bak").exists())
 
+    async def test_reload_library_accepts_valid_external_changes_and_rejects_invalid_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            app = GearTrackerApp(str(path))
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.data["gear"][0]["notes"] = "Creates an undo checkpoint"
+                self.assertTrue(app.save())
+                self.assertTrue(app._undo_stack)
+                external = copy.deepcopy(app.data)
+                external["gear"][0]["name"] = "Updated by sync"
+                gc.save_data(path, external)
+                app.query_one("#gear-table").focus()
+                await pilot.press("ctrl+l")
+                self.assertEqual(app.data["gear"][0]["name"], "Updated by sync")
+                self.assertEqual(app._data_signature, gc.file_signature(path))
+                self.assertEqual(app._undo_stack, [])
+                self.assertEqual(app._redo_stack, [])
+
+                await pilot.press("2")
+                await pilot.click("#trip-open")
+                self.assertIsInstance(app.screen, TripDashboardScreen)
+                dashboard_update = copy.deepcopy(app.data)
+                dashboard_update["trips"][0]["name"] = "Synced trip name"
+                gc.save_data(path, dashboard_update)
+                await pilot.press("ctrl+l")
+                self.assertIn(
+                    "Synced trip name",
+                    str(app.screen.query_one("#dash-title", Static).render()),
+                )
+                await pilot.press("escape")
+
+                valid_data = copy.deepcopy(app.data)
+                valid_signature = app._data_signature
+                path.write_text("{not valid json", encoding="utf-8")
+                await pilot.press("ctrl+l")
+                self.assertEqual(app.data, valid_data)
+                self.assertEqual(app._data_signature, valid_signature)
+
+    async def test_saved_changes_can_be_undone_and_redone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            app = GearTrackerApp(str(path))
+            original_name = app.data["gear"][0]["name"]
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.data["gear"][0]["name"] = "Accidental edit"
+                self.assertTrue(app.save())
+
+                app.query_one("#gear-table").focus()
+                await pilot.press("ctrl+z")
+                self.assertEqual(app.data["gear"][0]["name"], original_name)
+                self.assertEqual(gc.load_data(path)["gear"][0]["name"], original_name)
+
+                await pilot.press("ctrl+y")
+                self.assertEqual(app.data["gear"][0]["name"], "Accidental edit")
+                self.assertEqual(gc.load_data(path)["gear"][0]["name"], "Accidental edit")
+
+    async def test_undo_refuses_to_overwrite_an_external_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            app = GearTrackerApp(str(path))
+            app.data["gear"][0]["name"] = "Saved locally"
+            self.assertTrue(app.save())
+            external = copy.deepcopy(app.data)
+            external["gear"][0]["name"] = "Changed elsewhere"
+            gc.save_data(path, external)
+
+            async with app.run_test(size=(120, 40)) as pilot:
+                app.query_one("#gear-table").focus()
+                await pilot.press("ctrl+z")
+
+                self.assertEqual(app.data["gear"][0]["name"], "Saved locally")
+                self.assertEqual(gc.load_data(path)["gear"][0]["name"], "Changed elsewhere")
+                self.assertEqual(len(app._undo_stack), 1)
+
+    async def test_restore_backup_confirms_and_preserves_current_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gear.json"
+            app = GearTrackerApp(str(path))
+            original_name = app.data["gear"][0]["name"]
+            app.data["gear"][0]["name"] = "Current unsatisfactory edit"
+            self.assertTrue(app.save())
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.press("ctrl+shift+b")
+                self.assertIsInstance(app.screen, ConfirmScreen)
+                await pilot.click("#c-confirm")
+                await pilot.pause()
+                self.assertEqual(app.data["gear"][0]["name"], original_name)
+                self.assertEqual(app._undo_stack, [])
+                self.assertEqual(app._redo_stack, [])
+                recovery = Path(f"{path}.before-restore.bak")
+                self.assertTrue(recovery.exists())
+                self.assertEqual(
+                    gc.load_data(recovery)["gear"][0]["name"],
+                    "Current unsatisfactory edit",
+                )
+
     async def test_gear_hotkey_and_ctrl_s_add_an_item(self):
         with tempfile.TemporaryDirectory() as directory:
             app = GearTrackerApp(str(Path(directory) / "gear.json"))
@@ -53,6 +152,45 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("t", "e", "s", "t", "ctrl+s")
                 self.assertEqual(len(app.data["gear"]), starting_count + 1)
                 self.assertEqual(app.data["gear"][-1]["name"], "test")
+
+    async def test_gear_duplicate_hotkey_creates_an_independent_variant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            starting_count = len(app.data["gear"])
+            async with app.run_test(size=(120, 40)) as pilot:
+                table = app.query_one("#gear-table")
+                table.focus()
+                source_id = table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+                source = copy.deepcopy(gc.find_gear(app.data, source_id))
+                await pilot.press("d")
+                self.assertEqual(len(app.data["gear"]), starting_count + 1)
+                duplicate = app.data["gear"][-1]
+                self.assertEqual(duplicate["id"], "G007")
+                self.assertEqual(duplicate["name"], f"{source['name']} (Copy)")
+                duplicate["notes"] = "variant-only"
+                self.assertEqual(gc.find_gear(app.data, source_id)["notes"], source["notes"])
+
+    async def test_forms_reject_non_finite_numbers_before_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            starting_gear = copy.deepcopy(app.data["gear"])
+            async with app.run_test(size=(100, 32)) as pilot:
+                app.push_screen(GearFormScreen(mode="add"))
+                await pilot.pause()
+                app.screen.query_one("#f-name", Input).value = "Impossible item"
+                app.screen.query_one("#f-weight", Input).value = "1e309"
+                await pilot.press("ctrl+s")
+                self.assertIsInstance(app.screen, GearFormScreen)
+                self.assertEqual(app.data["gear"], starting_gear)
+                await pilot.press("escape")
+
+                app.push_screen(TripFormScreen(mode="add"))
+                await pilot.pause()
+                app.screen.query_one("#t-name", Input).value = "Impossible trip"
+                app.screen.query_one("#t-target", Input).value = "1e309"
+                await pilot.press("ctrl+s")
+                self.assertIsInstance(app.screen, TripFormScreen)
+                self.assertEqual(len(app.data["trips"]), 1)
 
     async def test_compact_gear_form_keeps_actions_visible_and_previews_weight(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -76,6 +214,42 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.click("#f-save")
                 self.assertEqual(len(app.data["gear"]), starting_count + 1)
                 self.assertEqual(app.data["gear"][-1]["weight_oz"], 16.0)
+
+    async def test_compact_modal_submit_actions_stay_pinned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            async with app.run_test(size=(70, 20)) as pilot:
+                app.push_screen(TripFormScreen(mode="add"))
+                await pilot.pause()
+                app.screen.query_one(".dialog-scroll").scroll_end(animate=False)
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#t-save", Button).is_on_screen)
+                await pilot.press("escape")
+
+                gear = app.data["gear"][0]
+                entry = {"gear_id": gear["id"], "qty": 1, "note": ""}
+                app.push_screen(TripItemFormScreen(gear, entry))
+                await pilot.pause()
+                app.screen.query_one(".dialog-scroll").scroll_end(animate=False)
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#ti-save", Button).is_on_screen)
+                await pilot.press("escape")
+
+                app.push_screen(GearPickerScreen(app.data["gear"], []))
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#gp-add", Button).is_on_screen)
+                await pilot.press("escape")
+
+                app.push_screen(PackAuditScreen(app.data, app.data["trips"][0]))
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#audit-save", Button).is_on_screen)
+                await pilot.press("escape")
+
+                await pilot.press("ctrl+p")
+                app.screen.query_one(".dialog-scroll").scroll_end(animate=False)
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#preferences-open", Button).is_on_screen)
+                self.assertTrue(app.screen.query_one("#preferences-copy", Button).is_on_screen)
 
     async def test_duplicate_compare_quantity_and_audit_workflow(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,8 +280,59 @@ class KeyboardWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 await pilot.press("down", "down", "space", "ctrl+s")
                 self.assertTrue(app.data["trips"][1]["audit"])
 
+    async def test_context_actions_follow_visible_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = GearTrackerApp(str(Path(directory) / "gear.json"))
+            async with app.run_test(size=(120, 40)) as pilot:
+                gear_search = app.query_one("#gear-search", Input)
+                gear_search.value = "nothing could match this"
+                await pilot.pause()
+                self.assertTrue(app.query_one("#gear-edit", Button).disabled)
+                self.assertTrue(app.query_one("#gear-duplicate", Button).disabled)
+                self.assertTrue(app.query_one("#gear-delete", Button).disabled)
+                self.assertIn("No matching gear", str(app.query_one("#gear-status", Static).render()))
+
+                gear_search.value = ""
+                await pilot.press("2")
+                self.assertTrue(app.query_one("#trip-compare", Button).disabled)
+                app.query_one("#trip-search", Input).value = "nothing could match this"
+                await pilot.pause()
+                self.assertTrue(app.query_one("#trip-open", Button).disabled)
+                self.assertTrue(app.query_one("#trip-duplicate", Button).disabled)
+                self.assertTrue(app.query_one("#trip-delete", Button).disabled)
+
+                app.data["trips"][0]["items"] = []
+                app.push_screen(TripDashboardScreen("T001"))
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#dash-edit-item", Button).disabled)
+                self.assertTrue(app.screen.query_one("#dash-remove-item", Button).disabled)
+                self.assertFalse(app.screen.query_one("#dash-add-item", Button).disabled)
+                self.assertIn(
+                    "No gear assigned yet",
+                    str(app.screen.query_one("#dash-items-heading", Static).render()),
+                )
+                await pilot.press("escape")
+
+                app.data["trips"].clear()
+                await pilot.press("3")
+                self.assertTrue(app.query_one("#report-export-trip", Button).disabled)
+                self.assertIn(
+                    "full inventory export is still available",
+                    str(app.query_one("#report-status", Static).render()),
+                )
+
 
 class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_compact_setup_keeps_submit_action_pinned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = SetupApp(
+                preferences_path=str(Path(directory) / "config" / "preferences.json")
+            )
+            async with app.run_test(size=(70, 20)) as pilot:
+                app.query_one(".dialog-scroll").scroll_end(animate=False)
+                await pilot.pause()
+                self.assertTrue(app.query_one("#setup-use", Button).is_on_screen)
+
     async def test_first_run_creates_example_library_and_remembers_folder(self):
         with tempfile.TemporaryDirectory() as directory:
             storage = Path(directory) / "library"
@@ -138,6 +363,20 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertFalse(storage.exists())
             self.assertFalse(preference_path.exists())
+
+    async def test_first_run_can_create_blank_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            storage = Path(directory) / "blank-library"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            app = SetupApp(preferences_path=str(preference_path))
+            async with app.run_test(size=(100, 30)) as pilot:
+                app.query_one("#setup-folder", Input).value = str(storage)
+                app.query_one("#setup-examples", Checkbox).value = False
+                await pilot.press("enter")
+
+            data = gc.load_data(storage / preferences.DATA_FILENAME)
+            self.assertEqual(data["gear"], [])
+            self.assertEqual(data["trips"], [])
 
     async def test_open_create_switches_library_and_updates_derived_paths(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -180,6 +419,38 @@ class PreferenceWorkflowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(
                     app.data_path,
                     preferences.data_path_for_directory(destination),
+                )
+
+    async def test_open_create_can_start_with_blank_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "original" / "gear.json"
+            preference_path = Path(directory) / "config" / "preferences.json"
+            destination = Path(directory) / "blank-library"
+            app = GearTrackerApp(str(original), preferences_path=str(preference_path))
+
+            async with app.run_test(size=(120, 40)) as pilot:
+                app._change_library(("open", str(destination), False))
+
+                self.assertEqual(app.data["gear"], [])
+                self.assertEqual(app.data["trips"], [])
+                self.assertEqual(
+                    gc.load_data(destination / preferences.DATA_FILENAME)["gear"],
+                    [],
+                )
+
+                self.assertIn(
+                    "No gear yet",
+                    str(app.query_one("#gear-status", Static).render()),
+                )
+                await pilot.press("2")
+                self.assertIn(
+                    "No trips yet",
+                    str(app.query_one("#trip-status", Static).render()),
+                )
+                await pilot.press("3")
+                self.assertIn(
+                    "full inventory export is still available",
+                    str(app.query_one("#report-status", Static).render()),
                 )
 
     async def test_copy_switch_preserves_source_and_refuses_overwrite(self):
