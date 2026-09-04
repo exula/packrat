@@ -155,7 +155,8 @@ ModalScreen {
     padding: 2 3;
     width: 90%;
     max-width: 76;
-    height: auto;
+    height: 90%;
+    overflow-y: hidden;
 }
 
 #setup-dialog Label, #preferences-dialog Label {
@@ -174,7 +175,8 @@ ModalScreen {
     padding: 1 2;
     width: 90%;
     max-width: 76;
-    height: auto;
+    height: 90%;
+    overflow-y: hidden;
 }
 
 #insights-settings-dialog, #insights-profile-dialog, #proposal-dialog {
@@ -184,7 +186,12 @@ ModalScreen {
     width: 95%;
     max-width: 92;
     height: 90%;
-    overflow-y: auto;
+    overflow-y: hidden;
+}
+
+.dialog-scroll, .insights-form-scroll {
+    height: 1fr;
+    padding-right: 1;
 }
 
 #insights-layout {
@@ -235,6 +242,11 @@ ModalScreen {
     margin-left: 1;
 }
 
+.provider-row Button {
+    min-width: 14;
+    margin-left: 1;
+}
+
 .profile-field {
     height: 4;
     margin-bottom: 1;
@@ -277,6 +289,11 @@ ModalScreen {
 }
 
 #dialog.gear-form-dialog {
+    height: 90%;
+    overflow-y: hidden;
+}
+
+#dialog.trip-form-dialog, #dialog.trip-item-form-dialog {
     height: 90%;
     overflow-y: hidden;
 }
@@ -511,17 +528,18 @@ class TripFormScreen(ModalScreen[Optional[dict]]):
 
     def compose(self) -> ComposeResult:
         title = "Add Trip" if self.mode == "add" else f"Edit: {self.initial.get('name','')}"
-        with Vertical(id="dialog", classes="form-dialog"):
+        with Vertical(id="dialog", classes="form-dialog trip-form-dialog"):
             yield Label(title, classes="dialog-title")
-            yield Label("Trip Name")
-            yield Input(value=self.initial.get("name", ""), id="t-name", placeholder="e.g. VA Triple Crown")
-            yield Label("Dates / Season")
-            yield Input(value=self.initial.get("dates", ""), id="t-dates", placeholder="e.g. Late October")
-            yield Label("Target Base Weight (lb)")
-            target = self.initial.get("target_base_weight_lb")
-            yield Input(value="" if target is None else str(target), id="t-target", type="number")
-            yield Label("Notes")
-            yield Input(value=self.initial.get("notes", ""), id="t-notes")
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Label("Trip Name")
+                yield Input(value=self.initial.get("name", ""), id="t-name", placeholder="e.g. VA Triple Crown")
+                yield Label("Dates / Season")
+                yield Input(value=self.initial.get("dates", ""), id="t-dates", placeholder="e.g. Late October")
+                yield Label("Target Base Weight (lb)")
+                target = self.initial.get("target_base_weight_lb")
+                yield Input(value="" if target is None else str(target), id="t-target", type="number")
+                yield Label("Notes")
+                yield Input(value=self.initial.get("notes", ""), id="t-notes")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="t-cancel")
                 yield Button("Save", id="t-save", variant="success")
@@ -671,14 +689,15 @@ class TripItemFormScreen(ModalScreen[Optional[dict]]):
         self.entry = entry
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="dialog", classes="form-dialog"):
+        with Vertical(id="dialog", classes="form-dialog trip-item-form-dialog"):
             yield Label(f"Edit trip item: {self.gear['name']}", classes="dialog-title")
-            yield Label(f"Inventory weight per unit: {gc.format_weight_oz(self.gear['weight_oz'])}")
-            yield Label("Trip quantity")
-            yield Input(value=str(self.entry.get("qty", self.gear.get("qty", 1))),
-                        id="ti-qty", type="integer")
-            yield Label("Trip-specific note")
-            yield Input(value=self.entry.get("note", ""), id="ti-note")
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Label(f"Inventory weight per unit: {gc.format_weight_oz(self.gear['weight_oz'])}")
+                yield Label("Trip quantity")
+                yield Input(value=str(self.entry.get("qty", self.gear.get("qty", 1))),
+                            id="ti-qty", type="integer")
+                yield Label("Trip-specific note")
+                yield Input(value=self.entry.get("note", ""), id="ti-note")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="ti-cancel")
                 yield Button("Save", id="ti-save", variant="success")
@@ -875,7 +894,7 @@ class ShortcutHelpScreen(ModalScreen[None]):
 
 [b]Anywhere[/b]       1 / 2 / 3 / 4  Switch tabs  /  Search     ?  This help
                  Ctrl+B  Backup   Ctrl+L  Reload library   Ctrl+P  Preferences   Q  Quit
-                 Ctrl+Shift+B  Restore latest backup
+                 Ctrl+Z  Undo saved change   Ctrl+Y  Redo   Ctrl+Shift+B  Restore latest backup
 
 [b]Gear[/b]           A  Add      E  Edit      Delete  Delete      R  Review filter
 [b]Gear variants[/b]  D  Duplicate selected gear
@@ -1556,18 +1575,23 @@ class InsightsProfileScreen(ModalScreen[Optional[dict]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="insights-profile-dialog"):
             yield Label("Pack profile", classes="dialog-title")
-            yield Static("This context is stored with the portable library and included in AI requests.")
-            fields = [
-                ("Experience level", "experience_level"),
-                ("Priorities (weight, comfort, cost, durability, simplicity)", "priorities"),
-                ("Typical conditions", "typical_conditions"),
-                ("Budget notes", "budget_notes"),
-                ("Constraints", "constraints"),
-                ("Additional context", "additional_context"),
-            ]
-            for label, field in fields:
-                yield Label(label)
-                yield TextArea(self.profile.get(field, ""), id=f"profile-{field}", classes="profile-field")
+            with VerticalScroll(classes="insights-form-scroll"):
+                yield Static("This context is stored with the portable library and included in AI requests.")
+                fields = [
+                    ("Experience level", "experience_level"),
+                    ("Priorities (weight, comfort, cost, durability, simplicity)", "priorities"),
+                    ("Typical conditions", "typical_conditions"),
+                    ("Budget notes", "budget_notes"),
+                    ("Constraints", "constraints"),
+                    ("Additional context", "additional_context"),
+                ]
+                for label, field in fields:
+                    yield Label(label)
+                    yield TextArea(
+                        self.profile.get(field, ""),
+                        id=f"profile-{field}",
+                        classes="profile-field",
+                    )
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="profile-cancel")
                 yield Button("Save Profile", id="profile-save", variant="success")
@@ -1591,6 +1615,88 @@ class InsightsProfileScreen(ModalScreen[Optional[dict]]):
         self.action_save()
 
 
+class ModelPickerScreen(ModalScreen[Optional[str]]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "choose", "Choose model"),
+    ]
+
+    def __init__(self, provider: str, models: List[str], current: str = ""):
+        super().__init__()
+        self.provider = provider
+        self.models = models
+        self.current = current
+
+    def compose(self) -> ComposeResult:
+        recommended = insights.RECOMMENDED_MODELS.get(self.provider, "")
+        with Vertical(id="dialog", classes="picker-dialog"):
+            yield Label(f"Choose a {self.provider.title()} model", classes="dialog-title")
+            yield Static(
+                f"Packrat suggests {recommended}." if recommended in self.models
+                else "Choose from the compatible models available to this account."
+            )
+            yield Input(placeholder="Filter models…", id="model-search")
+            yield DataTable(id="model-table", cursor_type="row", zebra_stripes=True)
+            with Horizontal(classes="dialog-buttons"):
+                yield Button("Cancel", id="model-cancel")
+                yield Button("Use Selected", id="model-choose", variant="success")
+
+    def on_mount(self) -> None:
+        self.query_one("#model-table", DataTable).add_columns("Model", "Recommendation")
+        self._refresh("")
+        self.query_one("#model-search", Input).focus()
+
+    def _refresh(self, query: str) -> None:
+        table = self.query_one("#model-table", DataTable)
+        table.clear()
+        term = query.strip().lower()
+        recommended = insights.RECOMMENDED_MODELS.get(self.provider, "")
+        for model in self.models:
+            if term and term not in model.lower():
+                continue
+            table.add_row(model, "Suggested" if model == recommended else "", key=model)
+        if self.current and self.current in self.models and not term:
+            try:
+                table.move_cursor(row=table.get_row_index(self.current), animate=False)
+            except KeyError:
+                pass
+
+    @on(Input.Changed, "#model-search")
+    def _search(self, event: Input.Changed) -> None:
+        self._refresh(event.value)
+
+    def _selected_model(self) -> Optional[str]:
+        table = self.query_one("#model-table", DataTable)
+        if not table.row_count:
+            return None
+        try:
+            return str(table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value)
+        except Exception:
+            return None
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_choose(self) -> None:
+        selected = self._selected_model()
+        if selected is None:
+            self.app.notify("No model matches that filter", severity="warning")
+            return
+        self.dismiss(selected)
+
+    @on(DataTable.RowSelected, "#model-table")
+    def _row_selected(self, event: DataTable.RowSelected) -> None:
+        self.dismiss(str(event.row_key.value))
+
+    @on(Button.Pressed, "#model-cancel")
+    def _cancel(self) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#model-choose")
+    def _choose(self) -> None:
+        self.action_choose()
+
+
 class InsightsSettingsScreen(ModalScreen[bool]):
     BINDINGS = [Binding("escape", "cancel", "Cancel"), Binding("ctrl+s", "save", "Save")]
 
@@ -1603,33 +1709,59 @@ class InsightsSettingsScreen(ModalScreen[bool]):
         providers = self.settings["providers"]
         with Vertical(id="insights-settings-dialog"):
             yield Label("AI providers", classes="dialog-title")
-            yield Static(
-                "API keys use environment variables first, then the OS keychain. Keys are never written "
-                "to Packrat files. A custom cloud URL receives that provider's credential."
-            )
-            yield Label("Primary provider")
-            yield Select(
-                [(name.title(), name) for name in insights.PROVIDERS],
-                value=self.settings["primary_provider"], id="settings-primary",
-            )
-            for name in insights.PROVIDERS:
-                config = providers[name]
-                _, source = insights.CredentialStore.get(name)
-                with Horizontal(classes="provider-row"):
-                    yield Checkbox(name.title(), value=config["enabled"], id=f"settings-{name}-enabled")
-                    yield Input(value=config["model"], placeholder="Model ID", id=f"settings-{name}-model")
-                with Horizontal(classes="provider-row"):
-                    yield Input(value=config["base_url"], placeholder="Base URL", id=f"settings-{name}-url")
-                    yield Input(
-                        placeholder=f"API key ({source}; leave blank to keep)", password=True,
-                        id=f"settings-{name}-key",
+            with VerticalScroll(classes="insights-form-scroll"):
+                yield Static(
+                    "API keys use environment variables first, then the OS keychain. Keys are never written "
+                    "to Packrat files. Fetch models to choose from those available to your account. "
+                    "A custom cloud URL receives that provider's credential."
+                )
+                yield Label("Primary provider")
+                yield Select(
+                    [(name.title(), name) for name in insights.PROVIDERS],
+                    value=self.settings["primary_provider"], id="settings-primary",
+                )
+                for name in insights.PROVIDERS:
+                    config = providers[name]
+                    environment_key = os.environ.get(insights.ENV_KEYS[name])
+                    key_placeholder = (
+                        "API key (environment variable active)"
+                        if environment_key
+                        else "API key (leave blank to keep stored key)"
                     )
+                    with Horizontal(classes="provider-row"):
+                        yield Checkbox(
+                            name.title(),
+                            value=config["enabled"],
+                            id=f"settings-{name}-enabled",
+                        )
+                        yield Input(
+                            value=config["model"],
+                            placeholder="Model ID",
+                            id=f"settings-{name}-model",
+                        )
+                        yield Button(
+                            "Choose Model",
+                            id=f"settings-{name}-models",
+                            classes="model-fetch",
+                        )
+                    with Horizontal(classes="provider-row"):
+                        yield Input(
+                            value=config["base_url"],
+                            placeholder="Base URL",
+                            id=f"settings-{name}-url",
+                        )
+                        yield Input(
+                            placeholder=key_placeholder,
+                            password=True,
+                            id=f"settings-{name}-key",
+                        )
             yield Static("", id="settings-status")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="settings-cancel")
                 yield Button("Remove Primary Key", id="settings-remove-key")
+            with Horizontal(classes="dialog-buttons"):
                 yield Button("Test Primary & Save", id="settings-test")
-                yield Button("Save", id="settings-save", variant="success")
+                yield Button("Save Without Test", id="settings-save", variant="success")
 
     def _collect(self):
         primary = self.query_one("#settings-primary", Select).value
@@ -1647,24 +1779,54 @@ class InsightsSettingsScreen(ModalScreen[bool]):
             value["providers"][name] = {"enabled": enabled, "model": model, "base_url": base_url}
         return value
 
-    def _persist(self, value=None):
-        value = value or self._collect()
-        for name in insights.PROVIDERS:
-            key = self.query_one(f"#settings-{name}-key", Input).value.strip()
-            if key:
-                insights.CredentialStore.set(name, key)
-        self.settings = preferences.save_insights_settings(value, self.preferences_path)
+    def _pending_keys(self) -> dict:
+        return {
+            name: self.query_one(f"#settings-{name}-key", Input).value.strip()
+            for name in insights.PROVIDERS
+            if self.query_one(f"#settings-{name}-key", Input).value.strip()
+        }
 
     def action_cancel(self) -> None:
         self.workers.cancel_group(self, "provider-test")
+        self.workers.cancel_group(self, "model-fetch")
+        self.workers.cancel_group(self, "provider-save")
+        self.workers.cancel_group(self, "key-removal")
         self.dismiss(False)
 
     def action_save(self) -> None:
         try:
-            self._persist()
-        except (OSError, ValueError, preferences.PreferencesError, insights.InsightError) as exc:
+            value = self._collect()
+        except (ValueError, preferences.PreferencesError) as exc:
             self.query_one("#settings-status", Static).update(str(exc))
             return
+        self._start_save(value, "Provider settings saved")
+
+    def _start_save(self, value: dict, message: str) -> None:
+        keys = self._pending_keys()
+        self._set_testing(True)
+        self.query_one("#settings-status", Static).update("Saving provider settings…")
+        self._save_settings(value, keys, message)
+
+    @work(thread=True, exclusive=True, group="provider-save")
+    def _save_settings(self, value: dict, keys: dict, message: str) -> None:
+        try:
+            for name, key in keys.items():
+                insights.CredentialStore.set(name, key)
+            saved = preferences.save_insights_settings(value, self.preferences_path)
+        except (OSError, preferences.PreferencesError, insights.InsightError) as exc:
+            self.app.call_from_thread(self._finish_save, None, None, str(exc))
+            return
+        self.app.call_from_thread(self._finish_save, saved, message, None)
+
+    def _finish_save(self, saved, message, error) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        if error:
+            self.query_one("#settings-status", Static).update(error)
+            return
+        self.settings = saved
+        self.app.notify(message)
         self.dismiss(True)
 
     @on(Button.Pressed, "#settings-cancel")
@@ -1694,8 +1856,66 @@ class InsightsSettingsScreen(ModalScreen[bool]):
         for widget_type in (Input, Select, Checkbox):
             for widget in self.query(widget_type):
                 widget.disabled = testing
-        for selector in ("#settings-remove-key", "#settings-test", "#settings-save"):
-            self.query_one(selector, Button).disabled = testing
+        for button in self.query(Button):
+            if button.id != "settings-cancel":
+                button.disabled = testing
+
+    @on(Button.Pressed, ".model-fetch")
+    def _choose_model(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        provider = button_id.removeprefix("settings-").removesuffix("-models")
+        if provider not in insights.PROVIDERS:
+            return
+        base_url = self.query_one(f"#settings-{provider}-url", Input).value.strip()
+        try:
+            base_url = preferences.validate_provider_base_url(base_url, provider)
+        except preferences.PreferencesError as exc:
+            self.query_one("#settings-status", Static).update(str(exc))
+            return
+        api_key = self.query_one(f"#settings-{provider}-key", Input).value.strip() or None
+        self._set_testing(True)
+        self.query_one("#settings-status", Static).update(
+            f"Fetching {provider.title()} models…"
+        )
+        self._fetch_models(provider, {"base_url": base_url}, api_key)
+
+    @work(thread=True, exclusive=True, group="model-fetch")
+    def _fetch_models(self, provider: str, config: dict, api_key: Optional[str]) -> None:
+        try:
+            models = insights.ProviderClient().list_models(provider, config, api_key=api_key)
+        except insights.InsightError as exc:
+            self.app.call_from_thread(self._show_model_error, str(exc))
+            return
+        self.app.call_from_thread(self._show_models, provider, models)
+
+    def _show_model_error(self, message: str) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        self.query_one("#settings-status", Static).update(message)
+
+    def _show_models(self, provider: str, models: List[str]) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        if not models:
+            self.query_one("#settings-status", Static).update(
+                f"{provider.title()} returned no compatible text models"
+            )
+            return
+        self.query_one("#settings-status", Static).update(
+            f"Found {len(models)} compatible {provider.title()} model(s)"
+        )
+
+        def selected(model: Optional[str]) -> None:
+            if model:
+                self.query_one(f"#settings-{provider}-model", Input).value = model
+                self.query_one("#settings-status", Static).update(
+                    f"Selected {model}. Save when your provider setup is ready."
+                )
+
+        current = self.query_one(f"#settings-{provider}-model", Input).value.strip()
+        self.app.push_screen(ModelPickerScreen(provider, models, current), selected)
 
     @on(Button.Pressed, "#settings-remove-key")
     def _remove_key(self) -> None:
@@ -1707,17 +1927,28 @@ class InsightsSettingsScreen(ModalScreen[bool]):
         def handled(confirmed: bool) -> None:
             if not confirmed:
                 return
-            insights.CredentialStore.delete(str(primary))
-            _, source = insights.CredentialStore.get(str(primary))
-            message = "Stored key removed."
-            if source == "environment":
-                message += " The environment variable is still active."
-            self.query_one("#settings-status", Static).update(message)
+            self._set_testing(True)
+            self.query_one("#settings-status", Static).update("Removing stored key…")
+            self._remove_stored_key(str(primary))
 
         self.app.push_screen(
             ConfirmScreen(f"Remove the stored {str(primary).title()} API key?", danger=True),
             handled,
         )
+
+    @work(thread=True, exclusive=True, group="key-removal")
+    def _remove_stored_key(self, provider: str) -> None:
+        insights.CredentialStore.delete(provider)
+        self.app.call_from_thread(self._finish_key_removal, provider)
+
+    def _finish_key_removal(self, provider: str) -> None:
+        if not self.is_mounted:
+            return
+        self._set_testing(False)
+        message = "Stored key removed."
+        if os.environ.get(insights.ENV_KEYS[provider]):
+            message += " The environment variable is still active."
+        self.query_one("#settings-status", Static).update(message)
 
     @work(thread=True, exclusive=True, group="provider-test")
     def _test_primary(self, value, api_key) -> None:
@@ -1739,13 +1970,7 @@ class InsightsSettingsScreen(ModalScreen[bool]):
         if error:
             self.query_one("#settings-status", Static).update(error)
             return
-        try:
-            self._persist(value)
-        except (OSError, ValueError, preferences.PreferencesError, insights.InsightError) as exc:
-            self.query_one("#settings-status", Static).update(str(exc))
-            return
-        self.app.notify(message)
-        self.dismiss(True)
+        self._start_save(value, message)
 
 
 class ProposalReviewScreen(ModalScreen[Optional[List[dict]]]):
@@ -1761,12 +1986,13 @@ class ProposalReviewScreen(ModalScreen[Optional[List[dict]]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="proposal-dialog"):
             yield Label("Review proposed changes", classes="dialog-title")
-            yield Static("Only checked changes will be applied. Packrat validates and recalculates everything locally.")
-            for index, proposal in enumerate(self.proposals):
-                reason = proposal.get("reason", "No reason supplied")
-                summary = f"{proposal.get('type', 'change')} · {proposal.get('gear_id', 'new gear')} — {reason}"
-                yield Checkbox(summary, value=False, id=f"proposal-{index}")
-                yield Static(json.dumps(proposal, indent=2, ensure_ascii=False), classes="panel")
+            with VerticalScroll(classes="insights-form-scroll"):
+                yield Static("Only checked changes will be applied. Packrat validates and recalculates everything locally.")
+                for index, proposal in enumerate(self.proposals):
+                    reason = proposal.get("reason", "No reason supplied")
+                    summary = f"{proposal.get('type', 'change')} · {proposal.get('gear_id', 'new gear')} — {reason}"
+                    yield Checkbox(summary, value=False, id=f"proposal-{index}")
+                    yield Static(json.dumps(proposal, indent=2, ensure_ascii=False), classes="panel")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="proposal-cancel")
                 yield Button("Apply Checked", id="proposal-apply", variant="success")
@@ -2395,17 +2621,18 @@ class SetupApp(App):
     def compose(self) -> ComposeResult:
         with Vertical(id="setup-dialog"):
             yield Static("🎒 Welcome to Packrat", classes="dialog-title")
-            yield Static(
-                "Choose where Packrat should keep your gear library. "
-                "Start with examples for a quick tour, or uncheck the option for a blank library."
-            )
-            yield Label("Gear storage folder")
-            yield Input(value=str(preferences.suggested_data_directory()), id="setup-folder")
-            yield Checkbox(
-                "Include example gear and trip",
-                value=True,
-                id="setup-examples",
-            )
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Static(
+                    "Choose where Packrat should keep your gear library. "
+                    "Start with examples for a quick tour, or uncheck the option for a blank library."
+                )
+                yield Label("Gear storage folder")
+                yield Input(value=str(preferences.suggested_data_directory()), id="setup-folder")
+                yield Checkbox(
+                    "Include example gear and trip",
+                    value=True,
+                    id="setup-examples",
+                )
             yield Static(self.initial_error, id="setup-error")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Quit", id="setup-quit")
@@ -2476,18 +2703,19 @@ class PreferencesScreen(ModalScreen[Optional[LibraryPreferenceResult]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="preferences-dialog"):
             yield Static("⚙ Storage Preferences", classes="dialog-title")
-            yield Static(
-                "Open a library in another folder, or copy the current library there. "
-                "The examples option only affects a newly created library; existing and "
-                "copied libraries are unchanged."
-            )
-            yield Label("Gear storage folder")
-            yield Input(value=self.current_directory, id="preferences-folder")
-            yield Checkbox(
-                "Include examples if creating a new library",
-                value=self.include_examples,
-                id="preferences-examples",
-            )
+            with VerticalScroll(classes="dialog-scroll"):
+                yield Static(
+                    "Open a library in another folder, or copy the current library there. "
+                    "The examples option only affects a newly created library; existing and "
+                    "copied libraries are unchanged."
+                )
+                yield Label("Gear storage folder")
+                yield Input(value=self.current_directory, id="preferences-folder")
+                yield Checkbox(
+                    "Include examples if creating a new library",
+                    value=self.include_examples,
+                    id="preferences-examples",
+                )
             yield Static(self.initial_error, id="preferences-error")
             with Horizontal(classes="dialog-buttons"):
                 yield Button("Cancel", id="preferences-cancel")
@@ -2549,6 +2777,8 @@ class GearTrackerApp(App):
         Binding("ctrl+shift+b", "restore_backup", "Restore", show=False),
         Binding("ctrl+l", "reload_library", "Reload"),
         Binding("ctrl+p", "preferences", "Preferences", priority=True),
+        Binding("ctrl+z", "undo", "Undo"),
+        Binding("ctrl+y", "redo", "Redo", show=False),
         Binding("q", "quit", "Quit"),
         Binding("ctrl+c", "quit", "Quit", show=False),
     ]
@@ -2565,6 +2795,8 @@ class GearTrackerApp(App):
             gc.save_data(self.data_path, self.data)
         self._data_signature = gc.file_signature(self.data_path)
         self._last_saved_data = copy.deepcopy(self.data)
+        self._undo_stack: List[dict] = []
+        self._redo_stack: List[dict] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, time_format="%I:%M %p")
@@ -2657,6 +2889,7 @@ class GearTrackerApp(App):
         self.data = new_data
         self._data_signature = gc.file_signature(destination_path)
         self._last_saved_data = copy.deepcopy(new_data)
+        self._clear_history()
         self._refresh_tab(self.query_one(TabbedContent).active)
         self.notify(f"Now using {destination_path}", title="Library changed", timeout=5)
 
@@ -2690,6 +2923,7 @@ class GearTrackerApp(App):
             self.data = restored
             self._data_signature = signature
             self._last_saved_data = copy.deepcopy(restored)
+            self._clear_history()
             if isinstance(self.screen, TripDashboardScreen):
                 self.screen.refresh_dashboard()
             else:
@@ -2723,6 +2957,7 @@ class GearTrackerApp(App):
         self.data = reloaded
         self._data_signature = gc.file_signature(self.data_path)
         self._last_saved_data = copy.deepcopy(reloaded)
+        self._clear_history()
         if isinstance(self.screen, TripDashboardScreen):
             self.screen.refresh_dashboard()
         else:
@@ -2753,6 +2988,7 @@ class GearTrackerApp(App):
             self.query_one(InsightsPane).refresh_options()
 
     def save(self) -> bool:
+        previous = copy.deepcopy(self._last_saved_data)
         try:
             self._data_signature = gc.save_data(
                 self.data_path,
@@ -2763,8 +2999,64 @@ class GearTrackerApp(App):
             self.data = copy.deepcopy(self._last_saved_data)
             self.notify(f"Save failed; changes were rolled back: {exc}", severity="error", timeout=7)
             return False
+        if self.data != previous:
+            self._undo_stack.append(previous)
+            del self._undo_stack[:-25]
+            self._redo_stack.clear()
         self._last_saved_data = copy.deepcopy(self.data)
         return True
+
+    def _clear_history(self) -> None:
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+
+    def _refresh_current_view(self) -> None:
+        if isinstance(self.screen, TripDashboardScreen):
+            self.screen.refresh_dashboard()
+        else:
+            self._refresh_tab(self.query_one(TabbedContent).active)
+
+    def _apply_history(
+        self,
+        source: List[dict],
+        destination: List[dict],
+        action: str,
+    ) -> None:
+        if isinstance(self.screen, (ModalScreen, TripComparisonScreen)):
+            self.notify(f"Close the current dialog or comparison before {action.lower()}ing", severity="warning")
+            return
+        if not source:
+            self.notify(f"Nothing to {action.lower()}", severity="information", timeout=2)
+            return
+        target = source.pop()
+        current = copy.deepcopy(self.data)
+        try:
+            signature = gc.save_data(
+                self.data_path,
+                target,
+                expected_signature=self._data_signature,
+            )
+        except (OSError, gc.DataValidationError) as exc:
+            source.append(target)
+            self.notify(
+                f"{action} failed; current data was kept: {exc}",
+                severity="error",
+                timeout=7,
+            )
+            return
+        destination.append(current)
+        del destination[:-25]
+        self.data = copy.deepcopy(target)
+        self._data_signature = signature
+        self._last_saved_data = copy.deepcopy(target)
+        self._refresh_current_view()
+        self.notify(f"{action} complete", timeout=2)
+
+    def action_undo(self) -> None:
+        self._apply_history(self._undo_stack, self._redo_stack, "Undo")
+
+    def action_redo(self) -> None:
+        self._apply_history(self._redo_stack, self._undo_stack, "Redo")
 
     def write_export(self, filename: str, content: str) -> Optional[str]:
         path = os.path.join(self.export_dir, filename)

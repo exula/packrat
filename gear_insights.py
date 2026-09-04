@@ -23,6 +23,12 @@ import packrat_preferences as preferences
 SESSION_VERSION = 1
 PROVIDERS = ("openai", "anthropic", "gemini", "local")
 RESEARCH_PROVIDERS = {"openai", "anthropic", "gemini"}
+RECOMMENDED_MODELS = {
+    "openai": "gpt-5.6-terra",
+    "anthropic": "claude-sonnet-5",
+    "gemini": "gemini-3.6-flash",
+    "local": "",
+}
 MODES = {
     "shakedown": "Find ranked, practical weight savings and explain every tradeoff.",
     "trip_coach": "Review this trip for omissions, redundancy, audit risks, and fit for its stated conditions.",
@@ -369,6 +375,39 @@ def _citations_from(value):
     return found
 
 
+def compatible_models(provider, model_ids):
+    """Return unique text-generation model IDs with the suggested model first."""
+    unsupported_fragments = {
+        "openai": (
+            "audio", "embedding", "image", "moderation", "realtime", "search-preview",
+            "transcribe", "tts", "whisper", "babbage", "davinci", "computer-use",
+        ),
+        "gemini": (
+            "audio", "embedding", "image", "live", "robotics", "tts", "veo",
+            "computer-use", "deep-research", "antigravity",
+        ),
+    }
+    allowed_prefixes = {
+        "openai": ("gpt-", "o1", "o3", "o4", "o5", "chatgpt-"),
+    }
+    result = []
+    for value in model_ids:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        model = value.strip()
+        lowered = model.lower()
+        if provider in allowed_prefixes:
+            base_model = lowered.split(":", 2)[1] if lowered.startswith("ft:") else lowered
+            if not base_model.startswith(allowed_prefixes[provider]):
+                continue
+        if any(fragment in lowered for fragment in unsupported_fragments.get(provider, ())):
+            continue
+        if model not in result:
+            result.append(model)
+    recommended = RECOMMENDED_MODELS.get(provider, "")
+    return sorted(result, key=lambda model: (model != recommended, model.lower()))
+
+
 class ProviderClient:
     """Small REST adapters with a common result contract."""
 
@@ -441,13 +480,23 @@ class ProviderClient:
         if provider != "local" and not key:
             raise InsightError("Configure an API key first")
         if provider == "gemini":
-            payload = self._request("GET", f"{base}/models?key={quote(key or '')}")
-            return [item.get("name", "").split("/")[-1] for item in payload.get("models", [])]
+            payload = self._request(
+                "GET", f"{base}/models?pageSize=1000&key={quote(key or '')}"
+            )
+            models = [
+                item.get("name", "").split("/")[-1]
+                for item in payload.get("models", [])
+                if "generateContent" in item.get("supportedGenerationMethods", ["generateContent"])
+            ]
+            return compatible_models(provider, models)
         headers = {"authorization": f"Bearer {key}"} if provider != "anthropic" else {
             "x-api-key": key or "", "anthropic-version": "2023-06-01"
         }
         payload = self._request("GET", f"{base}/models", headers=headers)
-        return [item.get("id", "") for item in payload.get("data", []) if item.get("id")]
+        return compatible_models(
+            provider,
+            [item.get("id", "") for item in payload.get("data", []) if item.get("id")],
+        )
 
     def run(self, provider, config, prompt, research=False, on_delta: Optional[Callable[[str], None]] = None):
         if provider not in PROVIDERS:

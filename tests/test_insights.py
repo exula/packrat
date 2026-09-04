@@ -14,7 +14,7 @@ import gear_insights as insights
 import packrat_preferences as preferences
 from gear_tui import (
     ConfirmScreen, GearTrackerApp, InsightsPane, InsightsProfileScreen, InsightsSettingsScreen,
-    ProposalReviewScreen,
+    ModelPickerScreen, ProposalReviewScreen,
 )
 from textual.containers import VerticalScroll
 from textual.widgets import Button, Checkbox, Input, Select, TabbedContent, TextArea
@@ -101,6 +101,13 @@ class InsightCoreTests(unittest.TestCase):
 
 
 class PreferenceAndCredentialTests(unittest.TestCase):
+    def test_cloud_providers_have_helpful_default_models(self):
+        providers = preferences.default_settings()["insights"]["providers"]
+        self.assertEqual(providers["openai"]["model"], "gpt-5.6-terra")
+        self.assertEqual(providers["anthropic"]["model"], "claude-sonnet-5")
+        self.assertEqual(providers["gemini"]["model"], "gemini-3.6-flash")
+        self.assertEqual(providers["local"]["model"], "")
+
     def test_version_one_preferences_migrate_and_keys_are_never_serialized(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "preferences.json"
@@ -193,6 +200,42 @@ class ProviderTests(unittest.TestCase):
                 )
         self.assertNotIn("never-print-this", str(caught.exception))
 
+    def test_model_discovery_filters_non_text_models_and_prioritizes_default(self):
+        def openai_handler(request):
+            return httpx.Response(200, json={"data": [
+                {"id": "text-embedding-3-small"},
+                {"id": "gpt-5.6-sol"},
+                {"id": "gpt-5.6-terra"},
+                {"id": "gpt-image-2"},
+                {"id": "ft:gpt-5.6-terra:team:packrat"},
+            ]})
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False):
+            models = insights.ProviderClient(
+                transport=httpx.MockTransport(openai_handler)
+            ).list_models("openai", {"base_url": "https://api.openai.com/v1"})
+        self.assertEqual(models[0], "gpt-5.6-terra")
+        self.assertIn("gpt-5.6-sol", models)
+        self.assertIn("ft:gpt-5.6-terra:team:packrat", models)
+        self.assertNotIn("text-embedding-3-small", models)
+        self.assertNotIn("gpt-image-2", models)
+
+        def gemini_handler(request):
+            self.assertEqual(request.url.params["pageSize"], "1000")
+            return httpx.Response(200, json={"models": [
+                {"name": "models/gemini-3.6-flash", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-embedding-001", "supportedGenerationMethods": ["embedContent"]},
+            ]})
+
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"}, clear=False):
+            models = insights.ProviderClient(
+                transport=httpx.MockTransport(gemini_handler)
+            ).list_models(
+                "gemini",
+                {"base_url": "https://generativelanguage.googleapis.com/v1beta"},
+            )
+        self.assertEqual(models, ["gemini-3.6-flash"])
+
     def test_environment_base_url_is_validated_before_a_request(self):
         with patch.dict(os.environ, {"PACKRAT_LOCAL_BASE_URL": "file:///tmp/provider"}, clear=False):
             with self.assertRaisesRegex(insights.InsightError, "http:// or https://"):
@@ -257,6 +300,80 @@ class ProviderTests(unittest.TestCase):
 
 
 class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
+    async def test_provider_models_can_be_fetched_searched_and_selected(self):
+        class FakeClient:
+            def list_models(self, provider, config, api_key=None):
+                self.provider = provider
+                self.config = config
+                return ["llama3.2:latest", "qwen3:8b"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_path = Path(directory) / "gear_data.json"
+            preference_path = Path(directory) / "preferences.json"
+            gc.save_data(data_path, gc.example_data())
+            app = GearTrackerApp(str(data_path), preferences_path=str(preference_path))
+            with patch("gear_tui.insights.ProviderClient", FakeClient):
+                async with app.run_test(size=(90, 30)) as pilot:
+                    await pilot.press("4")
+                    app.query_one(InsightsPane).query_one("#insights-settings").press()
+                    await pilot.pause()
+                    settings_screen = app.screen
+                    settings_screen.query_one("#settings-local-models").press()
+                    for _ in range(30):
+                        if isinstance(app.screen, ModelPickerScreen):
+                            break
+                        await asyncio.sleep(0.02)
+                        await pilot.pause()
+                    self.assertIsInstance(app.screen, ModelPickerScreen)
+                    app.screen.query_one("#model-search", Input).value = "qwen"
+                    await pilot.pause()
+                    await pilot.click("#model-choose")
+                    await pilot.pause()
+                    self.assertIs(app.screen, settings_screen)
+                    self.assertEqual(
+                        settings_screen.query_one("#settings-local-model", Input).value,
+                        "qwen3:8b",
+                    )
+
+    async def test_insights_save_actions_stay_visible_on_compact_terminals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_path = Path(directory) / "gear_data.json"
+            gc.save_data(data_path, gc.example_data())
+            app = GearTrackerApp(str(data_path))
+            async with app.run_test(size=(70, 20)) as pilot:
+                await pilot.press("4")
+                pane = app.query_one(InsightsPane)
+
+                pane.query_one("#insights-profile").press()
+                await pilot.pause()
+                app.screen.query_one(".insights-form-scroll", VerticalScroll).scroll_end(
+                    animate=False
+                )
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#profile-save", Button).is_on_screen)
+                await pilot.press("escape")
+
+                pane.query_one("#insights-settings").press()
+                await pilot.pause()
+                app.screen.query_one(".insights-form-scroll", VerticalScroll).scroll_end(
+                    animate=False
+                )
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#settings-save", Button).is_on_screen)
+                self.assertTrue(app.screen.query_one("#settings-test", Button).is_on_screen)
+                await pilot.press("escape")
+
+                proposals = [
+                    {"type": "trip_remove", "gear_id": "G001", "reason": f"Reason {index}"}
+                    for index in range(10)
+                ]
+                app.push_screen(ProposalReviewScreen(proposals))
+                await pilot.pause()
+                app.screen.query_one(".insights-form-scroll", VerticalScroll).scroll_end(
+                    animate=False
+                )
+                await pilot.pause()
+                self.assertTrue(app.screen.query_one("#proposal-apply", Button).is_on_screen)
     async def test_removing_a_provider_key_requires_confirmation(self):
         with tempfile.TemporaryDirectory() as directory, patch(
             "gear_tui.insights.CredentialStore.get", return_value=("stored", "keychain")
@@ -280,7 +397,26 @@ class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
                 settings_screen.query_one("#settings-remove-key").press()
                 await pilot.pause()
                 await pilot.click("#c-confirm")
+                for _ in range(30):
+                    if delete_key.called:
+                        break
+                    await asyncio.sleep(0.02)
+                    await pilot.pause()
                 delete_key.assert_called_once_with("openai")
+
+    async def test_opening_provider_settings_does_not_read_the_keychain(self):
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "gear_tui.insights.CredentialStore.get",
+            side_effect=AssertionError("rendering must not access the keychain"),
+        ):
+            data_path = Path(directory) / "gear_data.json"
+            gc.save_data(data_path, gc.example_data())
+            app = GearTrackerApp(str(data_path))
+            async with app.run_test() as pilot:
+                await pilot.press("4")
+                app.query_one(InsightsPane).query_one("#insights-settings").press()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, InsightsSettingsScreen)
 
     async def test_provider_test_only_saves_after_a_successful_connection(self):
         class FakeClient:
@@ -374,7 +510,11 @@ class InsightsTUITests(unittest.IsolatedAsyncioTestCase):
                 app.screen.query_one("#settings-local-model").value = "gpt-oss:20b"
                 app.screen.query_one("#settings-primary", Select).value = "local"
                 await pilot.press("ctrl+s")
-                await pilot.pause()
+                for _ in range(30):
+                    if not isinstance(app.screen, InsightsSettingsScreen):
+                        break
+                    await asyncio.sleep(0.02)
+                    await pilot.pause()
                 self.assertTrue(app.insights_settings["providers"]["local"]["enabled"])
                 self.assertFalse(pane.query_one("#insights-run", Button).disabled)
                 self.assertTrue(pane.query_one("#insights-council", Button).disabled)

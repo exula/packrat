@@ -71,6 +71,8 @@ are:
   process changes it on disk.
 - **Ctrl+P** opens Storage Preferences to open another library or copy the
   current library to a new folder and switch to it.
+- **Ctrl+Z / Ctrl+Y** undo and redo up to 25 successfully saved library
+  changes. History is cleared when you reload, restore, or switch libraries.
 
 - **Click a table row** to select it; **click it again** (or press Enter)
   to open/edit it. This two-step click mirrors how most file browsers work
@@ -113,10 +115,13 @@ are:
 
 ## AI provider setup
 
-Open **Insights → Providers** and enable one or more providers. Enter a model
-ID and optionally an API key. **Test Primary & Save** verifies the selected
-provider before committing the settings; a failed test leaves the prior
-configuration unchanged. Keys entered in Packrat are stored in the
+Open **Insights → Providers** and enable one or more providers. Packrat starts
+cloud providers with a practical default model; choose **Choose Model** to
+fetch compatible models available to your account, search the list, and select
+one without memorizing an ID. Model IDs remain editable for custom endpoints.
+**Test Primary & Save** verifies the selected provider before committing the
+settings; a failed test leaves the prior configuration unchanged. Keys entered
+in Packrat are stored in the
 operating system keychain, never in `preferences.json`, `gear_data.json`, or
 saved insight sessions. Environment variables take precedence:
 

@@ -27,17 +27,17 @@ DEFAULT_INSIGHTS_SETTINGS = {
     "providers": {
         "openai": {
             "enabled": False,
-            "model": "",
+            "model": "gpt-5.6-terra",
             "base_url": "https://api.openai.com/v1",
         },
         "anthropic": {
             "enabled": False,
-            "model": "",
+            "model": "claude-sonnet-5",
             "base_url": "https://api.anthropic.com/v1",
         },
         "gemini": {
             "enabled": False,
-            "model": "",
+            "model": "gemini-3.6-flash",
             "base_url": "https://generativelanguage.googleapis.com/v1beta",
         },
         "local": {
@@ -98,6 +98,8 @@ def _validate_insights(value):
             raise PreferencesError(f"preferences provider {name}.enabled must be boolean")
         if not isinstance(model, str) or not isinstance(base_url, str):
             raise PreferencesError(f"preferences provider {name} text values must be strings")
+        if not model.strip():
+            model = defaults["model"]
         normalized_url = base_url.strip().rstrip("/")
         if enabled:
             normalized_url = validate_provider_base_url(normalized_url, name)
